@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <title>Sentetik Banka Hesap Dokumu Ornegi</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 14mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #1f2933;
+      background: #ffffff;
+      font-size: 11px;
+      line-height: 1.3;
+    }
+
+    .page {
+      position: relative;
+      width: 100%;
+      min-height: 269mm;
+      padding: 8mm;
+      border: 1px solid #9aa5b1;
+      overflow: hidden;
+    }
+
+    .watermark {
+      position: absolute;
+      top: 48%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-28deg);
+      font-size: 42px;
+      font-weight: 700;
+      color: rgba(180, 0, 0, 0.10);
+      letter-spacing: 2px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .top-note {
+      border: 2px solid #b42318;
+      color: #b42318;
+      padding: 7px 10px;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+
+    .header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: start;
+      border-bottom: 2px solid #243b53;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      margin: 0 0 4px;
+      font-size: 17px;
+      color: #102a43;
+    }
+
+    h2 {
+      font-size: 13px;
+      margin: 12px 0 7px;
+      color: #102a43;
+      border-bottom: 1px solid #cbd2d9;
+      padding-bottom: 4px;
+    }
+
+    p {
+      margin: 2px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #ffffff;
+      margin-bottom: 9px;
+    }
+
+    th,
+    td {
+      border: 1px solid #9aa5b1;
+      padding: 5px 6px;
+      vertical-align: top;
+    }
+
+    th {
+      background: #e4e7eb;
+      color: #102a43;
+      text-align: left;
+    }
+
+    .label {
+      width: 22%;
+      background: #f5f7fa;
+      font-weight: 700;
+    }
+
+    .amount {
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin: 8px 0 10px;
+    }
+
+    .summary div {
+      border: 1px solid #9aa5b1;
+      padding: 8px;
+      background: #f5f7fa;
+    }
+
+    .summary span {
+      display: block;
+      color: #52606d;
+      font-size: 10px;
+    }
+
+    .summary strong {
+      display: block;
+      margin-top: 2px;
+      color: #102a43;
+      font-size: 13px;
+      text-align: right;
+    }
+
+    .small {
+      font-size: 10px;
+      color: #52606d;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="watermark">SENTETIK ORNEK</div>
+
+    <div class="top-note">
+      SENTETIK ORNEK BELGEDIR - RESMI BANKA DOKUMU DEGILDIR - SADECE CrediSense AI PROJE TESTI ICIN URETILMISTIR
+    </div>
+
+    <section class="header">
+      <div>
+        <h1>Ornek Bankasi A.S.</h1>
+        <p><strong>Belge:</strong> Hesap Hareketleri Dokumu</p>
+        <p><strong>Sube:</strong> Istanbul Dijital Sube</p>
+      </div>
+      <div>
+        <p><strong>Dokum No:</strong> SYN-BNK-2026-001</p>
+        <p><strong>Dokum Tarihi:</strong> 01.04.2026</p>
+        <p><strong>Donem:</strong> 01.01.2026 - 31.03.2026</p>
+      </div>
+    </section>
+
+    <h2>Hesap Sahibi Bilgileri</h2>
+    <table>
+      <tr>
+        <td class="label">Ad Soyad</td>
+        <td>Deniz Kaya</td>
+        <td class="label">TCKN Benzeri Test No</td>
+        <td>11111111110</td>
+      </tr>
+      <tr>
+        <td class="label">Hesap No</td>
+        <td>000123456789</td>
+        <td class="label">IBAN</td>
+        <td>TR00 0000 0000 0000 0000 0000 00</td>
+      </tr>
+      <tr>
+        <td class="label">Para Birimi</td>
+        <td>TRY</td>
+        <td class="label">Hesap Tipi</td>
+        <td>Vadesiz Mevduat</td>
+      </tr>
+    </table>
+
+    <section class="summary">
+      <div>
+        <span>Donem Basi Bakiye</span>
+        <strong>18.250,00 TL</strong>
+      </div>
+      <div>
+        <span>Toplam Gelen</span>
+        <strong>133.452,25 TL</strong>
+      </div>
+      <div>
+        <span>Toplam Giden</span>
+        <strong>116.034,30 TL</strong>
+      </div>
+      <div>
+        <span>Donem Sonu Bakiye</span>
+        <strong>35.667,95 TL</strong>
+      </div>
+    </section>
+
+    <h2>Hesap Hareketleri</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Tarih</th>
+          <th>Aciklama</th>
+          <th class="amount">Gelen (TL)</th>
+          <th class="amount">Giden (TL)</th>
+          <th class="amount">Bakiye (TL)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>03.01.2026</td><td>Market Alisverisi</td><td class="amount">0,00</td><td class="amount">1.245,30</td><td class="amount">17.004,70</td></tr>
+        <tr><td>05.01.2026</td><td>Kira Odemesi</td><td class="amount">0,00</td><td class="amount">14.500,00</td><td class="amount">2.504,70</td></tr>
+        <tr><td>07.01.2026</td><td>Maas Odemesi - Nova Veri Teknolojileri A.S.</td><td class="amount">42.350,75</td><td class="amount">0,00</td><td class="amount">44.855,45</td></tr>
+        <tr><td>10.01.2026</td><td>Kredi Karti Odemesi</td><td class="amount">0,00</td><td class="amount">7.850,00</td><td class="amount">37.005,45</td></tr>
+        <tr><td>18.01.2026</td><td>Fatura Odemeleri</td><td class="amount">0,00</td><td class="amount">2.130,40</td><td class="amount">34.875,05</td></tr>
+        <tr><td>25.01.2026</td><td>Transfer Giden</td><td class="amount">0,00</td><td class="amount">4.500,00</td><td class="amount">30.375,05</td></tr>
+        <tr><td>07.02.2026</td><td>Maas Odemesi - Nova Veri Teknolojileri A.S.</td><td class="amount">42.350,75</td><td class="amount">0,00</td><td class="amount">72.725,80</td></tr>
+        <tr><td>08.02.2026</td><td>Kira Odemesi</td><td class="amount">0,00</td><td class="amount">14.500,00</td><td class="amount">58.225,80</td></tr>
+        <tr><td>12.02.2026</td><td>Kredi Karti Odemesi</td><td class="amount">0,00</td><td class="amount">8.240,00</td><td class="amount">49.985,80</td></tr>
+        <tr><td>17.02.2026</td><td>Market Alisverisi</td><td class="amount">0,00</td><td class="amount">1.980,20</td><td class="amount">48.005,60</td></tr>
+        <tr><td>22.02.2026</td><td>Ek Gelir - Serbest Calisma</td><td class="amount">6.400,00</td><td class="amount">0,00</td><td class="amount">54.405,60</td></tr>
+        <tr><td>27.02.2026</td><td>Transfer Giden</td><td class="amount">0,00</td><td class="amount">5.750,00</td><td class="amount">48.655,60</td></tr>
+        <tr><td>07.03.2026</td><td>Maas Odemesi - Nova Veri Teknolojileri A.S.</td><td class="amount">42.350,75</td><td class="amount">0,00</td><td class="amount">91.006,35</td></tr>
+        <tr><td>08.03.2026</td><td>Kira Odemesi</td><td class="amount">0,00</td><td class="amount">14.500,00</td><td class="amount">76.506,35</td></tr>
+        <tr><td>12.03.2026</td><td>Kredi Karti Odemesi</td><td class="amount">0,00</td><td class="amount">8.920,00</td><td class="amount">67.586,35</td></tr>
+        <tr><td>16.03.2026</td><td>Fatura Odemeleri</td><td class="amount">0,00</td><td class="amount">2.188,40</td><td class="amount">65.397,95</td></tr>
+        <tr><td>21.03.2026</td><td>Market Alisverisi</td><td class="amount">0,00</td><td class="amount">2.130,00</td><td class="amount">63.267,95</td></tr>
+        <tr><td>29.03.2026</td><td>Transfer Giden</td><td class="amount">0,00</td><td class="amount">27.600,00</td><td class="amount">35.667,95</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Proje Test Notu</h2>
+    <p>
+      Bu dokumanda maas girisleri, sentetik maas bordrosundaki net odenecek tutar olan
+      42.350,75 TL ile uyumlu olacak sekilde hazirlanmistir. Belge, gelir duzeni, harcama/gelir
+      orani, nakit akisi ve tutarlilik kontrolu testleri icin kullanilabilir.
+    </p>
+
+    <p class="small">
+      Not: Bu dokumandaki banka, kisi, hesap, IBAN ve islem bilgileri tamamen sentetiktir.
+      Resmi, hukuki veya finansal islem amaciyla kullanilamaz.
+    </p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment files
+.env
+.env.*
+
+# Generated reports
+raporlar/*.json
+raporlar/*.md
+!raporlar/README.md
+
+# Trained model artifacts
+modeller/*.pkl
+modeller/*.joblib
+modeller/*.json
+!modeller/README.md
+
+# Downloaded and processed datasets
+veri/kaynak_veri_setleri/**
+!veri/kaynak_veri_setleri/
+!veri/kaynak_veri_setleri/README.md
+veri/islenmis/**
+!veri/islenmis/
+!veri/islenmis/README.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Office temporary files
+~$*.docx
+~$*.xlsx

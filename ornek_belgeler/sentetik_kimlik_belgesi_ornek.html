@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <title>Sentetik Kimlik Belgesi Ornegi</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #1f2933;
+      background: #ffffff;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .page {
+      position: relative;
+      width: 100%;
+      min-height: 260mm;
+      padding: 10mm;
+      border: 1px solid #9aa5b1;
+      overflow: hidden;
+    }
+
+    .watermark {
+      position: absolute;
+      top: 47%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-28deg);
+      font-size: 42px;
+      font-weight: 700;
+      color: rgba(180, 0, 0, 0.12);
+      letter-spacing: 2px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .top-note {
+      border: 2px solid #b42318;
+      color: #b42318;
+      padding: 8px 10px;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 18px;
+    }
+
+    .header {
+      border-bottom: 2px solid #243b53;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 18px;
+      color: #102a43;
+    }
+
+    .header p {
+      margin: 4px 0 0;
+      color: #52606d;
+    }
+
+    .identity-card {
+      display: grid;
+      grid-template-columns: 38mm 1fr;
+      gap: 14px;
+      border: 1px solid #9aa5b1;
+      padding: 14px;
+      background: #f8fafc;
+      margin-bottom: 18px;
+    }
+
+    .photo {
+      width: 38mm;
+      height: 48mm;
+      border: 1px solid #9aa5b1;
+      background: #e4e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #52606d;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    h2 {
+      font-size: 13px;
+      margin: 16px 0 8px;
+      color: #102a43;
+      border-bottom: 1px solid #cbd2d9;
+      padding-bottom: 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 10px;
+      background: #ffffff;
+    }
+
+    td,
+    th {
+      border: 1px solid #9aa5b1;
+      padding: 7px 8px;
+      vertical-align: top;
+    }
+
+    th {
+      background: #e4e7eb;
+      color: #102a43;
+      text-align: left;
+    }
+
+    .label {
+      width: 28%;
+      background: #f5f7fa;
+      font-weight: 700;
+    }
+
+    .qr {
+      width: 32mm;
+      height: 32mm;
+      border: 1px solid #9aa5b1;
+      background:
+        linear-gradient(90deg, #111 10%, transparent 10% 20%, #111 20% 30%, transparent 30% 45%, #111 45% 60%, transparent 60% 75%, #111 75% 85%, transparent 85%),
+        linear-gradient(#111 10%, transparent 10% 20%, #111 20% 30%, transparent 30% 45%, #111 45% 60%, transparent 60% 75%, #111 75% 85%, transparent 85%);
+      background-size: 8mm 8mm;
+      opacity: 0.28;
+    }
+
+    .bottom {
+      display: grid;
+      grid-template-columns: 1fr 36mm;
+      gap: 16px;
+      align-items: end;
+      margin-top: 12px;
+    }
+
+    .small {
+      font-size: 10px;
+      color: #52606d;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="watermark">SENTETIK ORNEK</div>
+
+    <div class="top-note">
+      SENTETIK ORNEK BELGEDIR - RESMI KIMLIK BELGESI DEGILDIR - SADECE CrediSense AI PROJE TESTI ICIN URETILMISTIR
+    </div>
+
+    <section class="header">
+      <h1>Kimlik Bilgileri Test Dokumani</h1>
+      <p>Bu dokuman resmi kimlik karti tasarimi degildir. Yalnizca alan cikarimi testi icin hazirlanmistir.</p>
+    </section>
+
+    <section class="identity-card">
+      <div class="photo">SENTETIK<br>FOTOGRAF</div>
+      <div>
+        <h2>Kisi Bilgileri</h2>
+        <table>
+          <tr>
+            <td class="label">Ad</td>
+            <td>Deniz</td>
+            <td class="label">Soyad</td>
+            <td>Kaya</td>
+          </tr>
+          <tr>
+            <td class="label">TCKN Benzeri Test No</td>
+            <td>11111111110</td>
+            <td class="label">Dogum Tarihi</td>
+            <td>12.04.1992</td>
+          </tr>
+          <tr>
+            <td class="label">Dogum Yeri</td>
+            <td>Istanbul</td>
+            <td class="label">Cinsiyet</td>
+            <td>Belirtilmedi</td>
+          </tr>
+          <tr>
+            <td class="label">Belge No</td>
+            <td>SYN-KML-2026-001</td>
+            <td class="label">Uyruk</td>
+            <td>TR Test</td>
+          </tr>
+        </table>
+      </div>
+    </section>
+
+    <h2>Adres ve Iletisim Bilgileri</h2>
+    <table>
+      <tr>
+        <td class="label">Adres</td>
+        <td>Ataturk Mah. Bilisim Cad. No: 42, Istanbul</td>
+      </tr>
+      <tr>
+        <td class="label">Telefon</td>
+        <td>0555 000 00 00</td>
+      </tr>
+      <tr>
+        <td class="label">E-posta</td>
+        <td>deniz.kaya@example.test</td>
+      </tr>
+    </table>
+
+    <h2>Proje Test Alanlari</h2>
+    <table>
+      <tr>
+        <th>Alan</th>
+        <th>Deger</th>
+        <th>Kullanim Amaci</th>
+      </tr>
+      <tr>
+        <td>Ad Soyad</td>
+        <td>Deniz Kaya</td>
+        <td>Bordro ve banka dokumu ile isim tutarliligi kontrolu</td>
+      </tr>
+      <tr>
+        <td>Test Kimlik No</td>
+        <td>11111111110</td>
+        <td>Basvuru formu ile kimlik numarasi eslestirme testi</td>
+      </tr>
+      <tr>
+        <td>Dogum Tarihi</td>
+        <td>12.04.1992</td>
+        <td>Yas bilgisi ve risk modeli ozellik cikarimi</td>
+      </tr>
+    </table>
+
+    <section class="bottom">
+      <p>
+        Bu belge, CrediSense AI projesinde kimlik alani cikarimi ve belgeler arasi tutarlilik
+        kontrolu icin uretilmistir. Resmi, hukuki veya finansal islem amaciyla kullanilamaz.
+      </p>
+      <div class="qr"></div>
+    </section>
+
+    <p class="small">
+      Not: Bu dokumandaki kisi, belge numarasi, adres ve iletisim bilgileri tamamen sentetiktir.
+    </p>
+  </main>
+</body>
+</html>

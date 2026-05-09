@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <title>Sentetik Maas Bordrosu Ornegi</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #1f2933;
+      background: #ffffff;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .page {
+      position: relative;
+      width: 100%;
+      min-height: 260mm;
+      padding: 8mm;
+      border: 1px solid #9aa5b1;
+      overflow: hidden;
+    }
+
+    .watermark {
+      position: absolute;
+      top: 45%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-28deg);
+      font-size: 40px;
+      font-weight: 700;
+      color: rgba(180, 0, 0, 0.12);
+      letter-spacing: 2px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .top-note {
+      border: 2px solid #b42318;
+      color: #b42318;
+      padding: 8px 10px;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 14px;
+    }
+
+    .header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: start;
+      border-bottom: 2px solid #243b53;
+      padding-bottom: 12px;
+      margin-bottom: 14px;
+    }
+
+    .company h1 {
+      margin: 0 0 4px;
+      font-size: 18px;
+      color: #102a43;
+    }
+
+    .company p,
+    .period p {
+      margin: 2px 0;
+    }
+
+    .period {
+      text-align: right;
+      min-width: 170px;
+    }
+
+    .period strong {
+      display: block;
+      font-size: 16px;
+      color: #102a43;
+      margin-bottom: 4px;
+    }
+
+    h2 {
+      font-size: 13px;
+      margin: 16px 0 8px;
+      color: #102a43;
+      border-bottom: 1px solid #cbd2d9;
+      padding-bottom: 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 10px;
+    }
+
+    th,
+    td {
+      border: 1px solid #9aa5b1;
+      padding: 6px 7px;
+      vertical-align: top;
+    }
+
+    th {
+      background: #e4e7eb;
+      color: #102a43;
+      text-align: left;
+      font-weight: 700;
+    }
+
+    .label {
+      width: 24%;
+      background: #f5f7fa;
+      font-weight: 700;
+    }
+
+    .amount {
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .summary {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .net {
+      border: 2px solid #243b53;
+      padding: 10px;
+      text-align: right;
+      background: #f5f7fa;
+    }
+
+    .net span {
+      display: block;
+      font-size: 12px;
+    }
+
+    .net strong {
+      font-size: 20px;
+      color: #102a43;
+    }
+
+    .footer {
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    .signature {
+      height: 58px;
+      border-top: 1px solid #52606d;
+      padding-top: 6px;
+      text-align: center;
+      margin-top: 36px;
+    }
+
+    .small {
+      font-size: 10px;
+      color: #52606d;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="watermark">SENTETIK ORNEK</div>
+
+    <div class="top-note">
+      SENTETIK ORNEK BELGEDIR - RESMI BELGE DEGILDIR - SADECE CrediSense AI PROJE TESTI ICIN URETILMISTIR
+    </div>
+
+    <section class="header">
+      <div class="company">
+        <h1>Nova Veri Teknolojileri A.S.</h1>
+        <p><strong>Adres:</strong> Ataturk Mah. Bilisim Cad. No: 42, Istanbul</p>
+        <p><strong>Vergi No:</strong> 1234567890</p>
+        <p><strong>SGK Isyeri Sicil No:</strong> 34.01.1234567.034.01</p>
+      </div>
+      <div class="period">
+        <strong>MAAS BORDROSU</strong>
+        <p><strong>Donem:</strong> 2026 / 03</p>
+        <p><strong>Duzenleme Tarihi:</strong> 31.03.2026</p>
+        <p><strong>Bordro No:</strong> SYN-2026-03-001</p>
+      </div>
+    </section>
+
+    <h2>Calisan Bilgileri</h2>
+    <table>
+      <tr>
+        <td class="label">Ad Soyad</td>
+        <td>Deniz Kaya</td>
+        <td class="label">TCKN</td>
+        <td>11111111110</td>
+      </tr>
+      <tr>
+        <td class="label">Departman</td>
+        <td>Yapay Zeka ve Veri Analitigi</td>
+        <td class="label">Gorev</td>
+        <td>Veri Analisti</td>
+      </tr>
+      <tr>
+        <td class="label">Ise Giris Tarihi</td>
+        <td>15.08.2023</td>
+        <td class="label">Calisma Gunu</td>
+        <td>30</td>
+      </tr>
+      <tr>
+        <td class="label">Banka</td>
+        <td>Ornek Bankasi</td>
+        <td class="label">IBAN</td>
+        <td>TR00 0000 0000 0000 0000 0000 00</td>
+      </tr>
+    </table>
+
+    <h2>Kazanc Bilgileri</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Aciklama</th>
+          <th class="amount">Tutar (TL)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Brut Ucret</td>
+          <td class="amount">55.000,00</td>
+        </tr>
+        <tr>
+          <td>Yol Yardimi</td>
+          <td class="amount">2.000,00</td>
+        </tr>
+        <tr>
+          <td>Yemek Yardimi</td>
+          <td class="amount">3.000,00</td>
+        </tr>
+        <tr>
+          <th>Toplam Brut Kazanc</th>
+          <th class="amount">60.000,00</th>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Kesinti Bilgileri</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Aciklama</th>
+          <th class="amount">Tutar (TL)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>SGK Isci Primi</td>
+          <td class="amount">8.400,00</td>
+        </tr>
+        <tr>
+          <td>Issizlik Sigortasi Isci Payi</td>
+          <td class="amount">600,00</td>
+        </tr>
+        <tr>
+          <td>Gelir Vergisi</td>
+          <td class="amount">8.120,00</td>
+        </tr>
+        <tr>
+          <td>Damga Vergisi</td>
+          <td class="amount">529,25</td>
+        </tr>
+        <tr>
+          <th>Toplam Kesinti</th>
+          <th class="amount">17.649,25</th>
+        </tr>
+      </tbody>
+    </table>
+
+    <section class="summary">
+      <table>
+        <tr>
+          <td class="label">Toplam Brut Kazanc</td>
+          <td class="amount">60.000,00 TL</td>
+        </tr>
+        <tr>
+          <td class="label">Toplam Kesinti</td>
+          <td class="amount">17.649,25 TL</td>
+        </tr>
+      </table>
+      <div class="net">
+        <span>Net Odenecek Tutar</span>
+        <strong>42.350,75 TL</strong>
+      </div>
+    </section>
+
+    <h2>Proje Test Notu</h2>
+    <p>
+      Bu belge CrediSense AI projesinde belge anlama, gelir alanı çıkarımı ve banka hesap
+      dokumu ile maas tutari tutarlilik kontrolu testleri icin hazirlanmistir. Resmi, hukuki
+      veya finansal islem amaciyla kullanilamaz.
+    </p>
+
+    <section class="footer">
+      <div class="signature">
+        Isveren / Yetkili Imza
+      </div>
+      <div class="signature">
+        Calisan Imza
+      </div>
+    </section>
+
+    <p class="small">
+      Not: Bu dokumandaki kisi, sirket, vergi no, SGK no, IBAN ve tutarlar tamamen sentetiktir.
+    </p>
+  </main>
+</body>
+</html>
