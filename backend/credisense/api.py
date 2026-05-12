@@ -8,9 +8,9 @@ cevaplarından sorumludur.
 """
 
 import json
+import re
 import shutil
 import tempfile
-import uuid
 from pathlib import Path
 from typing import Annotated
 
@@ -85,7 +85,6 @@ async def analyze(
     _validate_document_count(documents)
     form_payload = _parse_application_form(application_form)
     dataset_path = DEFAULT_DATASET_PATH if use_dataset_summary else None
-    analysis_id = uuid.uuid4().hex
 
     with tempfile.TemporaryDirectory(prefix="credisense_api_") as temp_dir:
         temp_path = Path(temp_dir)
@@ -100,7 +99,7 @@ async def analyze(
             dataset_path=dataset_path,
             application_form=form_payload,
         )
-        result["analysis_id"] = analysis_id
+        analysis_id = result["application_id"]
 
         if create_report:
             report_files = create_analysis_reports(
@@ -198,12 +197,21 @@ def _unique_target_path(target_folder: Path, file_name: str) -> Path:
 def _find_report_file(analysis_id: str, report_type: str) -> Path | None:
     """Analiz ID'siyle üretilmiş rapor dosyasını bulur."""
 
-    safe_analysis_id = "".join(character for character in analysis_id.lower() if character.isalnum() or character == "_")
+    safe_analysis_id = _safe_file_text(analysis_id)
     if not safe_analysis_id:
         return None
 
     matches = sorted(REPORT_FOLDER.glob(f"*_{safe_analysis_id}_analiz_raporu.{report_type}"))
     return matches[-1] if matches else None
+
+
+def _safe_file_text(value: str) -> str:
+    """Rapor ararken dosya adındaki güvenli başvuru ID biçimini üretir."""
+
+    value = value.lower().strip()
+    value = value.translate(str.maketrans("çğıöşü", "cgiosu"))
+    value = re.sub(r"[^a-z0-9]+", "_", value)
+    return value.strip("_")
 
 
 def _error_response(status_code: int, code: str, message: str) -> JSONResponse:

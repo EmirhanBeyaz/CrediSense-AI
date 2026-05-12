@@ -5,6 +5,7 @@
   "meslek": "Veri Analisti",
   "isveren_adi": "Nova Veri Teknolojileri A.S.",
   "beyan_edilen_aylik_gelir": 42350.75,
+  "gelir_turu": "Maas",
   "talep_edilen_kredi_tutari": 250000,
   "vade_ay": 36,
   "kredi_amaci": "İhtiyaç",
@@ -17,5 +18,7 @@
   "gecikme_30_59_sayisi": 0,
   "gecikme_60_89_sayisi": 0,
   "gecikme_90_sayisi": 0,
-  "gecikme_gun_sayisi": 0
+  "gecikme_gun_sayisi": 0,
+  "kvkk_onayi": true,
+  "veri_isleme_onayi": true
 }

@@ -94,3 +94,23 @@ Bu alanlar kullanıcıdan alınmaz; belge anlama ve analiz katmanları tarafınd
 | gecikme_30_59_sayisi | 0 |
 | gecikme_60_89_sayisi | 0 |
 | gecikme_90_sayisi | 0 |
+
+## 8. Ürün Akışı ve Onay Alanları
+
+Bu alanlar belge analizi dışında kalan ürün akışı için kullanılır. Gerçek üründe başvuru
+işlenmeden önce bu onayların kullanıcıdan alınması gerekir.
+
+| Alan | Tip | Zorunlu | Açıklama |
+|---|---|---|---|
+| kvkk_onayi | Boolean | Evet | Kullanıcının KVKK aydınlatma metnini kabul ettiğini gösterir. |
+| veri_isleme_onayi | Boolean | Evet | Finansal belgelerin ve form verilerinin analiz edilmesine izin verir. |
+
+Analiz sonucunda backend ayrıca şu ürün alanlarını üretir:
+
+| Alan | Açıklama |
+|---|---|
+| consent_quality | KVKK ve veri işleme onaylarının geçerli olup olmadığını gösterir. |
+| application_status | Başvurunun ürün durum kodunu ve sıradaki aksiyonu gösterir. |
+| user_view | Kullanıcı ekranında gösterilecek sade başvuru sonucudur. |
+| bank_view | Banka/uzman panelinde gösterilecek teknik karar özetidir. |
+| application_record | Başvurunun ID, güncel durum ve durum geçmişi kaydıdır. |

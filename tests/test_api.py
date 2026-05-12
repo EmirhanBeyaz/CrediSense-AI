@@ -40,9 +40,14 @@ def test_analyze_endpoint_with_sample_documents() -> None:
 
     payload = response.json()
     assert response.status_code == 200
-    assert len(payload["analysis_id"]) == 32
+    assert payload["application_id"].startswith("APP-")
+    assert payload["analysis_id"] == payload["application_id"]
+    assert payload["application_record"]["application_id"] == payload["application_id"]
     assert payload["documents"]["identity"]["full_name"] == "Deniz Kaya"
     assert payload["documents"]["bank_statement"]["transaction_count"] == 18
+    assert payload["consent_quality"]["is_valid"] is True
+    assert payload["application_status"]["status_code"] == "MANUAL_REVIEW"
+    assert payload["user_view"]["show_risk_score"] is False
     assert payload["risk"]["decision_summary"]["decision_code"] == "MANUAL_REVIEW"
     assert payload["dataset_summary"]["dataset_avg_risk_score"] == 0.49
     assert payload["report_files"]["json_report"].endswith(".json")

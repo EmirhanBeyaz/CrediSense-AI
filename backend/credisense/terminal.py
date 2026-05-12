@@ -64,7 +64,11 @@ def main() -> None:
     )
 
     if not args.no_report:
-        report_files = create_analysis_reports(result, output_folder=Path(args.report_dir))
+        report_files = create_analysis_reports(
+            result,
+            output_folder=Path(args.report_dir),
+            analysis_id=result.get("application_id", ""),
+        )
         result["report_files"] = report_files_to_dict(report_files)
 
     print(json.dumps(result, ensure_ascii=False, indent=2))

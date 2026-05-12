@@ -17,6 +17,16 @@ def test_sample_documents_produce_expected_risk_summary() -> None:
 
     assert result["documents"]["identity"]["full_name"] == "Deniz Kaya"
     assert result["documents"]["bank_statement"]["transaction_count"] == 18
+    assert result["application_package_quality"]["can_continue"] is True
+    assert result["application_package_quality"]["missing_required_documents"] == []
+    assert result["application_form_quality"]["is_valid"] is False
+    assert "talep_edilen_kredi_tutari" in result["application_form_quality"]["missing_required_fields"]
+    assert result["consent_quality"]["is_valid"] is False
+    assert result["application_status"]["status_code"] == "CONSENT_REQUIRED"
+    assert result["user_view"]["show_risk_score"] is False
+    assert result["application_id"].startswith("APP-")
+    assert result["analysis_id"] == result["application_id"]
+    assert result["application_record"]["application_id"] == result["application_id"]
     assert len(result["document_quality"]) == 3
     assert {item["document_type"] for item in result["document_quality"]} == {
         "identity",

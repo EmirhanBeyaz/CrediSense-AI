@@ -36,6 +36,8 @@ def create_analysis_reports(
     """Analiz sonucundan JSON ve Markdown rapor dosyaları üretir."""
 
     output_folder.mkdir(parents=True, exist_ok=True)
+    if not analysis_id:
+        analysis_id = analysis_result.get("application_id", "")
 
     file_stem = _report_file_stem(analysis_result, analysis_id=analysis_id)
     json_path = output_folder / f"{file_stem}.json"
@@ -61,7 +63,14 @@ def build_markdown_report(analysis_result: dict) -> str:
 
     documents = analysis_result.get("documents", {})
     application_form = analysis_result.get("application_form", {})
+    application_record = analysis_result.get("application_record", {})
     document_quality = analysis_result.get("document_quality", [])
+    package_quality = analysis_result.get("application_package_quality", {})
+    form_quality = analysis_result.get("application_form_quality", {})
+    consent_quality = analysis_result.get("consent_quality", {})
+    application_status = analysis_result.get("application_status", {})
+    user_view = analysis_result.get("user_view", {})
+    bank_view = analysis_result.get("bank_view", {})
     features = analysis_result.get("features", {})
     consistency = analysis_result.get("consistency", {})
     risk = analysis_result.get("risk", {})
@@ -74,6 +83,7 @@ def build_markdown_report(analysis_result: dict) -> str:
     lines = [
         "# CrediSense AI Başvuru Analiz Raporu",
         "",
+        f"Başvuru ID: `{analysis_result.get('application_id') or application_record.get('application_id', '')}`",
         f"Rapor tarihi: {_current_time_text()}",
         "",
         "## Karar Özeti",
@@ -86,11 +96,43 @@ def build_markdown_report(analysis_result: dict) -> str:
         f"- Kullanılan model: {risk.get('model_name') or 'Yok'}",
         f"- Model giriş kapsamı: {_format_percent(risk.get('model_input_coverage'))}",
         "",
+        "## Başvuru Durumu",
+        "",
+        f"- Durum kodu: `{application_status.get('status_code', '')}`",
+        f"- Durum metni: {application_status.get('status_text', '')}",
+        f"- Sonraki aksiyon: {application_status.get('next_action', '')}",
+        f"- Kullanıcı mesajı: {user_view.get('message', '')}",
+        f"- Banka önerisi: {bank_view.get('recommended_action', '')}",
+        "",
         "## Başvuru Sahibi",
         "",
         f"- Ad soyad: {identity.get('full_name') or application_form.get('ad_soyad', '')}",
         f"- Test kimlik no: {identity.get('test_id') or application_form.get('tckn_test_no', '')}",
         f"- Doğum tarihi: {identity.get('birth_date') or application_form.get('dogum_tarihi', '')}",
+        "",
+        "## Başvuru Paketi Ön Kontrolü",
+        "",
+        f"- Paket tamam mı: {_yes_no(package_quality.get('is_complete'))}",
+        f"- Analiz devam edebilir mi: {_yes_no(package_quality.get('can_continue'))}",
+        f"- Paket kalite skoru: {_format_score(package_quality.get('quality_score'))}",
+        f"- Eksik zorunlu belgeler: {_join_or_none(package_quality.get('missing_required_documents', []))}",
+        f"- Tekrarlı belge türleri: {_join_or_none(package_quality.get('duplicate_document_types', []))}",
+        f"- Eksik form alanları: {_join_or_none(package_quality.get('missing_required_form_fields', []))}",
+        "",
+        "## Başvuru Formu Doğrulama",
+        "",
+        f"- Form geçerli mi: {_yes_no(form_quality.get('is_valid'))}",
+        f"- Form kalite skoru: {_format_score(form_quality.get('quality_score'))}",
+        f"- Eksik zorunlu alanlar: {_join_or_none(form_quality.get('missing_required_fields', []))}",
+        f"- Hatalı alanlar: {_join_or_none(form_quality.get('invalid_fields', []))}",
+        f"- Uyarılar: {_join_or_none(form_quality.get('warnings', []))}",
+        "",
+        "## Onay Kontrolü",
+        "",
+        f"- Onaylar geçerli mi: {_yes_no(consent_quality.get('is_valid'))}",
+        f"- Eksik onaylar: {_join_or_none(consent_quality.get('missing_consents', []))}",
+        f"- Reddedilen onaylar: {_join_or_none(consent_quality.get('rejected_consents', []))}",
+        f"- Uyarılar: {_join_or_none(consent_quality.get('warnings', []))}",
         "",
         "## Belge Özeti",
         "",
@@ -197,6 +239,18 @@ def _document_quality_lines(document_quality: list[dict]) -> list[str]:
         )
 
     return lines
+
+
+def _join_or_none(items: list[str]) -> str:
+    """Liste boşsa Yok, doluysa virgüllü metin döndürür."""
+
+    return ", ".join(items) if items else "Yok"
+
+
+def _yes_no(value) -> str:
+    """Boolean değeri Türkçe metne çevirir."""
+
+    return "Evet" if bool(value) else "Hayır"
 
 
 def _format_money(value) -> str:

@@ -6,9 +6,14 @@ __pycache__/
 .pytest_tmp/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Logs
 *.log
+*.err
+*.out
 
 # Virtual environments
 .venv/
@@ -18,6 +23,7 @@ env/
 # Local environment files
 .env
 .env.*
+!.env.example
 
 # Generated reports
 raporlar/*.json
@@ -38,11 +44,31 @@ veri/islenmis/**
 !veri/islenmis/
 !veri/islenmis/README.md
 
+# Large downloaded archives
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+
+# Local notebooks / experiments
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
 # OS / editor
 .DS_Store
 Thumbs.db
 desktop.ini
+.vscode/
+.idea/
 
 # Office temporary files
 ~$*.docx
 ~$*.xlsx
+~$*.pptx
+
+# Temporary files
+tmp/
+temp/
+*.tmp

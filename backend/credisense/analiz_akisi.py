@@ -18,6 +18,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
 
+from .basvuru_kaydi import build_application_record
+from .katman_00_basvuru_paketi import evaluate_application_package
+from .katman_00_form_dogrulama import validate_application_form
+from .katman_00_onay_kontrolu import validate_consents
 from .katman_01_pdf_okuma import extract_pdf
 from .katman_02_belge_anlama import (
     BankStatementInfo,
@@ -30,6 +34,7 @@ from .katman_02_belge_anlama import (
 from .katman_03_tutarlilik_anomali import ConsistencyResult, evaluate_consistency
 from .katman_04_finansal_ozellikler import bank_features, payroll_features
 from .katman_05_risk_tahmini import RiskResult, enrich_with_dataset_average, score_application
+from .urun_akisi import build_product_outputs
 
 
 DEFAULT_DEBT_AMOUNT = 125000.0
@@ -39,11 +44,15 @@ def analyze_documents(
     pdf_paths: Iterable[str | Path],
     dataset_path: str | Path | None = None,
     application_form: dict | None = None,
+    application_id: str = "",
 ) -> dict:
     """Verilen PDF belgelerini baştan sona analiz eder."""
 
     form = application_form or {}
     parsed_documents = _read_and_parse_documents(pdf_paths)
+    package_quality = evaluate_application_package(parsed_documents, form)
+    form_quality = validate_application_form(form)
+    consent_quality = validate_consents(form)
     consistency = evaluate_consistency(
         parsed_documents.identity,
         parsed_documents.payroll,
@@ -57,16 +66,39 @@ def analyze_documents(
         dataset_path=dataset_path,
     )
     dataset_summary = enrich_with_dataset_average(dataset_path) if dataset_path else {}
+    package_quality_dict = asdict(package_quality)
+    form_quality_dict = asdict(form_quality)
+    consent_quality_dict = asdict(consent_quality)
+    consistency_dict = asdict(consistency)
+    risk_dict = asdict(risk)
+    product_outputs = build_product_outputs(
+        package_quality=package_quality_dict,
+        form_quality=form_quality_dict,
+        consent_quality=consent_quality_dict,
+        risk=risk_dict,
+        consistency=consistency_dict,
+    )
 
-    return {
+    result = {
         "documents": _documents_to_dict(parsed_documents),
         "document_quality": parsed_documents.document_quality,
+        "application_package_quality": package_quality_dict,
+        "application_form_quality": form_quality_dict,
+        "consent_quality": consent_quality_dict,
+        "application_status": product_outputs["application_status"],
+        "user_view": product_outputs["user_view"],
+        "bank_view": product_outputs["bank_view"],
         "application_form": form,
         "features": features,
-        "consistency": asdict(consistency),
-        "risk": asdict(risk),
+        "consistency": consistency_dict,
+        "risk": risk_dict,
         "dataset_summary": dataset_summary,
     }
+    application_record = build_application_record(result, application_id=application_id)
+    result["application_id"] = application_record["application_id"]
+    result["analysis_id"] = application_record["application_id"]
+    result["application_record"] = application_record
+    return result
 
 
 def _read_and_parse_documents(pdf_paths: Iterable[str | Path]) -> ParsedDocuments:
