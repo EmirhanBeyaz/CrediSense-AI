@@ -74,6 +74,7 @@ class ParsedDocuments:
     payroll: PayrollInfo | None = None
     bank_statement: BankStatementInfo | None = None
     document_texts: dict[str, str] = field(default_factory=dict)
+    document_quality: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -81,6 +82,8 @@ class DocumentUnderstandingResult:
     document_type: str
     confidence: float
     fields: dict
+    missing_fields: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -110,11 +113,14 @@ def understand_document_text(text: str) -> DocumentUnderstandingResult:
     else:
         fields = {}
 
+    missing_fields = _missing_fields(document_type, fields)
     confidence = _field_confidence(fields)
     return DocumentUnderstandingResult(
         document_type=document_type,
         confidence=confidence,
         fields=fields,
+        missing_fields=missing_fields,
+        warnings=_understanding_warnings(document_type, missing_fields),
     )
 
 
@@ -401,6 +407,39 @@ def _field_confidence(fields: dict) -> float:
 
     filled_count = sum(1 for value in important_values if value)
     return round(filled_count / len(important_values), 2)
+
+
+def _missing_fields(document_type: str, fields: dict) -> list[str]:
+    """Belge türüne göre beklenen ama çıkarılamayan alanları listeler."""
+
+    required_fields = {
+        "identity": ["full_name", "test_id", "birth_date"],
+        "payroll": ["full_name", "employer", "period", "net_salary"],
+        "bank_statement": ["full_name", "test_id", "iban", "period", "transaction_count"],
+    }
+
+    if document_type == "unknown":
+        return ["document_type"]
+
+    missing = []
+    for field_name in required_fields.get(document_type, []):
+        value = fields.get(field_name)
+        if not value:
+            missing.append(field_name)
+
+    return missing
+
+
+def _understanding_warnings(document_type: str, missing_fields: list[str]) -> list[str]:
+    """Belge anlama sonucunu uzman ekranında okunabilir uyarılara çevirir."""
+
+    if document_type == "unknown":
+        return ["Belge türü belirlenemedi."]
+
+    if not missing_fields:
+        return []
+
+    return [f"Eksik alanlar: {', '.join(missing_fields)}"]
 
 
 # ---------------------------------------------------------------------------

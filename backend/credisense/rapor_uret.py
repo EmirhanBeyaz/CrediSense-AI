@@ -31,12 +31,13 @@ class ReportFiles:
 def create_analysis_reports(
     analysis_result: dict,
     output_folder: Path = DEFAULT_REPORT_FOLDER,
+    analysis_id: str = "",
 ) -> ReportFiles:
     """Analiz sonucundan JSON ve Markdown rapor dosyaları üretir."""
 
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    file_stem = _report_file_stem(analysis_result)
+    file_stem = _report_file_stem(analysis_result, analysis_id=analysis_id)
     json_path = output_folder / f"{file_stem}.json"
     markdown_path = output_folder / f"{file_stem}.md"
 
@@ -60,6 +61,7 @@ def build_markdown_report(analysis_result: dict) -> str:
 
     documents = analysis_result.get("documents", {})
     application_form = analysis_result.get("application_form", {})
+    document_quality = analysis_result.get("document_quality", [])
     features = analysis_result.get("features", {})
     consistency = analysis_result.get("consistency", {})
     risk = analysis_result.get("risk", {})
@@ -100,24 +102,33 @@ def build_markdown_report(analysis_result: dict) -> str:
         f"- Banka dönem: {bank.get('period', '')}",
         f"- Banka işlem sayısı: {bank.get('transaction_count', '')}",
         "",
-        "## Finansal Göstergeler",
-        "",
-        f"- Ortalama aylık gelir: {_format_money(features.get('avg_monthly_income'))}",
-        f"- Ortalama aylık gider: {_format_money(features.get('avg_monthly_expense'))}",
-        f"- Ortalama bakiye: {_format_money(features.get('avg_balance'))}",
-        f"- Harcama / gelir oranı: {_format_score(features.get('expense_income_ratio'))}",
-        f"- Borç / gelir oranı: {_format_score(features.get('debt_to_income_ratio'))}",
-        f"- Talep edilen kredi tutarı: {_format_money(features.get('requested_credit_amount'))}",
-        f"- Mevcut toplam borç: {_format_money(features.get('current_total_debt'))}",
-        "",
-        "## Tutarlılık ve Anomali",
-        "",
-        f"- Tutarlılık skoru: {_format_score(consistency.get('consistency_score'))}",
-        f"- Anomali skoru: {_format_score(consistency.get('anomaly_score'))}",
-        "",
-        "### Başarılı Kontroller",
+        "## Belge Okuma Kalitesi",
         "",
     ]
+
+    lines.extend(_document_quality_lines(document_quality))
+    lines.extend(
+        [
+            "",
+            "## Finansal Göstergeler",
+            "",
+            f"- Ortalama aylık gelir: {_format_money(features.get('avg_monthly_income'))}",
+            f"- Ortalama aylık gider: {_format_money(features.get('avg_monthly_expense'))}",
+            f"- Ortalama bakiye: {_format_money(features.get('avg_balance'))}",
+            f"- Harcama / gelir oranı: {_format_score(features.get('expense_income_ratio'))}",
+            f"- Borç / gelir oranı: {_format_score(features.get('debt_to_income_ratio'))}",
+            f"- Talep edilen kredi tutarı: {_format_money(features.get('requested_credit_amount'))}",
+            f"- Mevcut toplam borç: {_format_money(features.get('current_total_debt'))}",
+            "",
+            "## Tutarlılık ve Anomali",
+            "",
+            f"- Tutarlılık skoru: {_format_score(consistency.get('consistency_score'))}",
+            f"- Anomali skoru: {_format_score(consistency.get('anomaly_score'))}",
+            "",
+            "### Başarılı Kontroller",
+            "",
+        ]
+    )
 
     lines.extend(_markdown_list(consistency.get("positive_checks", [])))
     lines.extend(["", "### Uyarılar", ""])
@@ -129,7 +140,7 @@ def build_markdown_report(analysis_result: dict) -> str:
     return "\n".join(lines)
 
 
-def _report_file_stem(analysis_result: dict) -> str:
+def _report_file_stem(analysis_result: dict, analysis_id: str = "") -> str:
     """Rapor dosya adını tarih ve kişi adına göre üretir."""
 
     documents = analysis_result.get("documents", {})
@@ -138,6 +149,11 @@ def _report_file_stem(analysis_result: dict) -> str:
     full_name = identity.get("full_name") or application_form.get("ad_soyad") or "basvuru"
     safe_name = _safe_file_text(full_name)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_analysis_id = _safe_file_text(analysis_id)
+
+    if safe_analysis_id:
+        return f"{timestamp}_{safe_name}_{safe_analysis_id}_analiz_raporu"
+
     return f"{timestamp}_{safe_name}_analiz_raporu"
 
 
@@ -156,6 +172,31 @@ def _markdown_list(items: list[str]) -> list[str]:
     if not items:
         return ["- Yok"]
     return [f"- {item}" for item in items]
+
+
+def _document_quality_lines(document_quality: list[dict]) -> list[str]:
+    """Belge kalite özetini Markdown satırlarına çevirir."""
+
+    if not document_quality:
+        return ["- Belge kalite bilgisi yok."]
+
+    lines: list[str] = []
+    for item in document_quality:
+        pdf_extraction = item.get("pdf_extraction", {})
+        missing_fields = item.get("missing_fields", [])
+        warnings = item.get("warnings", [])
+        lines.extend(
+            [
+                f"- Dosya: `{item.get('file_name', '')}`",
+                f"  - Tür: `{item.get('document_type', '')}`",
+                f"  - Güven: {_format_percent(item.get('confidence'))}",
+                f"  - PDF okuyucu: `{pdf_extraction.get('extractor', '')}`",
+                f"  - Eksik alanlar: {', '.join(missing_fields) if missing_fields else 'Yok'}",
+                f"  - Uyarılar: {'; '.join(warnings) if warnings else 'Yok'}",
+            ]
+        )
+
+    return lines
 
 
 def _format_money(value) -> str:

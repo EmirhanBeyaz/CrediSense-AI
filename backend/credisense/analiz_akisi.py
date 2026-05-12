@@ -18,14 +18,14 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
 
-from .katman_01_pdf_okuma import extract_pdf_text
+from .katman_01_pdf_okuma import extract_pdf
 from .katman_02_belge_anlama import (
     BankStatementInfo,
     ParsedDocuments,
-    detect_document_type,
     parse_bank_statement,
     parse_identity,
     parse_payroll,
+    understand_document_text,
 )
 from .katman_03_tutarlilik_anomali import ConsistencyResult, evaluate_consistency
 from .katman_04_finansal_ozellikler import bank_features, payroll_features
@@ -60,6 +60,7 @@ def analyze_documents(
 
     return {
         "documents": _documents_to_dict(parsed_documents),
+        "document_quality": parsed_documents.document_quality,
         "application_form": form,
         "features": features,
         "consistency": asdict(consistency),
@@ -75,9 +76,26 @@ def _read_and_parse_documents(pdf_paths: Iterable[str | Path]) -> ParsedDocument
 
     for raw_path in pdf_paths:
         path = Path(raw_path)
-        text = extract_pdf_text(path)
-        document_type = detect_document_type(text)
+        pdf_result = extract_pdf(path)
+        text = pdf_result.text
+        understanding = understand_document_text(text)
+        document_type = understanding.document_type
         parsed.document_texts[path.name] = text
+        parsed.document_quality.append(
+            {
+                "file_name": path.name,
+                "document_type": document_type,
+                "confidence": understanding.confidence,
+                "missing_fields": understanding.missing_fields,
+                "warnings": [*(pdf_result.warnings or []), *understanding.warnings],
+                "pdf_extraction": {
+                    "ok": pdf_result.extraction_ok,
+                    "page_count": pdf_result.page_count,
+                    "extractor": pdf_result.extractor,
+                    "error": pdf_result.error,
+                },
+            }
+        )
 
         if document_type == "identity":
             parsed.identity = parse_identity(text)

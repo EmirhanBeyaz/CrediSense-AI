@@ -46,8 +46,17 @@ def main() -> None:
     args = parser.parse_args()
 
     pdf_paths = [Path(path) for path in args.pdfs]
+    missing_pdfs = [str(path) for path in pdf_paths if not path.exists()]
+    if missing_pdfs:
+        parser.error(f"PDF dosyası bulunamadı: {', '.join(missing_pdfs)}")
+
     dataset_path = Path(args.dataset) if args.dataset else None
-    application_form = _read_application_form(args.form)
+
+    try:
+        application_form = _read_application_form(args.form)
+    except (FileNotFoundError, ValueError) as error:
+        parser.error(str(error))
+
     result = analyze_documents(
         pdf_paths,
         dataset_path=dataset_path,
@@ -69,9 +78,17 @@ def _read_application_form(form_path: str) -> dict:
 
     path = Path(form_path)
     if not path.exists():
-        return {}
+        raise FileNotFoundError(f"Başvuru formu bulunamadı: {path}")
 
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Başvuru formu geçerli JSON değil: {path}") from error
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Başvuru formu JSON nesnesi olmalı: {path}")
+
+    return payload
 
 
 if __name__ == "__main__":

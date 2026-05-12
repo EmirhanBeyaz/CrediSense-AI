@@ -33,6 +33,8 @@ class PdfExtractionResult:
     text: str
     extraction_ok: bool
     error: str = ""
+    extractor: str = ""
+    warnings: list[str] | None = None
 
 
 @dataclass
@@ -64,14 +66,18 @@ def extract_pdf(path: str | Path) -> PdfExtractionResult:
 
     pdf_path = Path(path)
 
+    warnings: list[str] = []
+
     try:
-        text, page_count = _extract_text_and_page_count(pdf_path)
+        text, page_count, extractor = _extract_with_available_reader(pdf_path, warnings)
         return PdfExtractionResult(
             file_name=pdf_path.name,
             file_path=str(pdf_path),
             page_count=page_count,
             text=text,
             extraction_ok=bool(text.strip()),
+            extractor=extractor,
+            warnings=warnings,
         )
     except Exception as exc:
         return PdfExtractionResult(
@@ -81,6 +87,8 @@ def extract_pdf(path: str | Path) -> PdfExtractionResult:
             text="",
             extraction_ok=False,
             error=f"{type(exc).__name__}: {exc}",
+            extractor="none",
+            warnings=warnings,
         )
 
 
@@ -93,6 +101,45 @@ def extract_pdf_text(path: str | Path) -> str:
 # ---------------------------------------------------------------------------
 # Ana PDF okuma akışı
 # ---------------------------------------------------------------------------
+
+
+def _extract_with_available_reader(path: Path, warnings: list[str]) -> tuple[str, int, str]:
+    """Önce güçlü PDF okuyucuyu dener, olmazsa yerel okuyucuya düşer."""
+
+    pymupdf_result = _extract_with_pymupdf(path, warnings)
+    if pymupdf_result:
+        text, page_count = pymupdf_result
+        if text.strip():
+            return text, page_count, "pymupdf"
+
+        warnings.append("PyMuPDF belgeyi açtı ancak metin çıkaramadı; yerel okuyucu denendi.")
+
+    text, page_count = _extract_text_and_page_count(path)
+    extractor = "builtin"
+
+    if not text.strip():
+        warnings.append("PDF içinden metin çıkarılamadı. Belge taranmış veya görsel tabanlı olabilir.")
+
+    return text, page_count, extractor
+
+
+def _extract_with_pymupdf(path: Path, warnings: list[str]) -> tuple[str, int] | None:
+    """PyMuPDF kuruluysa PDF metnini onunla çıkarır."""
+
+    try:
+        import fitz
+    except ImportError:
+        warnings.append("PyMuPDF kurulu değil; yerel PDF okuyucu kullanıldı.")
+        return None
+
+    try:
+        with fitz.open(path) as document:
+            page_texts = [page.get_text("text").strip() for page in document]
+            text = "\n\n".join(page_text for page_text in page_texts if page_text)
+            return text.strip(), document.page_count
+    except Exception as exc:
+        warnings.append(f"PyMuPDF okuma hatası: {type(exc).__name__}: {exc}")
+        return None
 
 
 def _extract_text_and_page_count(path: Path) -> tuple[str, int]:
