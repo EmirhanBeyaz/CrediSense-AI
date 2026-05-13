@@ -1,6 +1,6 @@
 from datetime import date
 
-from backend.credisense.odeme_asistani import answer_payment_question
+from backend.credisense.odeme_asistani import answer_payment_message, answer_payment_question
 
 
 def test_payment_assistant_returns_summary() -> None:
@@ -33,11 +33,45 @@ def test_payment_assistant_early_payment_requires_bank_support() -> None:
 
 
 def test_payment_assistant_unknown_question_is_safe() -> None:
-    answer = answer_payment_question(_payment_plan(), "change_due_date")
+    answer = answer_payment_question(_payment_plan(), "not_supported_yet")
 
     assert answer["intent"] == "unknown"
     assert answer["requires_bank_support"] is True
     assert "summary" in answer["data"]["supported_questions"]
+
+
+def test_payment_assistant_returns_payment_status() -> None:
+    plan = _payment_plan()
+    plan["schedule"][0]["status"] = "paid"
+
+    answer = answer_payment_question(plan, "payment_status", today=date(2026, 6, 20))
+
+    assert answer["intent"] == "payment_status"
+    assert answer["data"]["paid_installment_count"] == 1
+    assert answer["requires_bank_support"] is False
+
+
+def test_payment_assistant_detects_overdue_payment() -> None:
+    answer = answer_payment_question(
+        _payment_plan(),
+        "overdue_payments",
+        today=date(2026, 6, 20),
+    )
+
+    assert answer["intent"] == "overdue_payments"
+    assert answer["data"]["total_overdue_amount"] == 9810.55
+    assert answer["requires_bank_support"] is True
+
+
+def test_payment_assistant_classifies_free_text_message() -> None:
+    answer = answer_payment_message(
+        _payment_plan(),
+        "Kalan borcum ne kadar?",
+        today=date(2026, 6, 1),
+    )
+
+    assert answer["intent"] == "remaining_debt"
+    assert answer["original_message"] == "Kalan borcum ne kadar?"
 
 
 def _payment_plan() -> dict:

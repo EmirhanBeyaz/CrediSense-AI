@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import tempfile
+from datetime import date
 from pathlib import Path
 from typing import Annotated
 
@@ -23,6 +24,9 @@ from pydantic import BaseModel, Field
 from .analiz_akisi import analyze_documents
 from .banka_kararlari import apply_bank_decision
 from .basvuru_deposu import DEFAULT_APPLICATION_STORE, get_application_record, list_application_records, save_application_record
+from .odeme_asistani import answer_payment_message, answer_payment_question
+from .odeme_deposu import DEFAULT_PAYMENT_STORE, get_payment_plan, list_payment_plans, save_payment_plan
+from .odeme_plani import build_payment_plan, update_installment_status
 from .rapor_uret import create_analysis_reports, report_files_to_dict
 
 
@@ -30,6 +34,7 @@ APP_VERSION = "0.1.0"
 DEFAULT_DATASET_PATH = Path("veri") / "sentetik_kredi_basvuru_veri_seti.csv"
 REPORT_FOLDER = Path("raporlar")
 APPLICATION_STORE_PATH = DEFAULT_APPLICATION_STORE
+PAYMENT_STORE_PATH = DEFAULT_PAYMENT_STORE
 MAX_DOCUMENT_COUNT = 10
 
 
@@ -40,6 +45,29 @@ class BankDecisionRequest(BaseModel):
     note: str = ""
     actor: str = "bank_user"
     requested_documents: list[str] = Field(default_factory=list)
+
+
+class PaymentPlanRequest(BaseModel):
+    """Odeme plani olusturma istegi."""
+
+    monthly_interest_rate: float = 0.025
+    first_due_date: str = ""
+
+
+class InstallmentStatusRequest(BaseModel):
+    """Tek taksit durumu guncelleme istegi."""
+
+    status: str
+    paid_date: str = ""
+    note: str = ""
+
+
+class PaymentAssistantRequest(BaseModel):
+    """Odeme asistani soru istegi."""
+
+    question_type: str = ""
+    message: str = ""
+    today: str = ""
 
 app = FastAPI(
     title="CrediSense AI API",
@@ -177,6 +205,93 @@ def decide_application(application_id: str, decision_request: BankDecisionReques
     return updated_record
 
 
+@app.post("/applications/{application_id}/payment-plan")
+def create_payment_plan(application_id: str, payment_request: PaymentPlanRequest) -> dict:
+    """Onayli basvuru kaydindan odeme plani olusturur."""
+
+    record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
+    if not record:
+        raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
+
+    first_due_date = _parse_optional_date(payment_request.first_due_date, field_name="first_due_date")
+    try:
+        payment_plan = build_payment_plan(
+            record,
+            monthly_interest_rate=payment_request.monthly_interest_rate,
+            first_due_date=first_due_date,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    save_payment_plan(payment_plan, store_path=PAYMENT_STORE_PATH)
+    return payment_plan
+
+
+@app.get("/payment-plans")
+def list_payment_plan_records(limit: int = 50) -> dict:
+    """Kayitli odeme planlarini listeler."""
+
+    safe_limit = max(1, min(limit, 100))
+    plans = list_payment_plans(store_path=PAYMENT_STORE_PATH, limit=safe_limit)
+    return {
+        "count": len(plans),
+        "payment_plans": plans,
+    }
+
+
+@app.get("/payment-plans/{loan_id}")
+def get_payment_plan_record(loan_id: str) -> dict:
+    """Kredi ID degerine gore odeme planini dondurur."""
+
+    payment_plan = get_payment_plan(loan_id, store_path=PAYMENT_STORE_PATH)
+    if not payment_plan:
+        raise HTTPException(status_code=404, detail="Ödeme planı bulunamadı.")
+    return payment_plan
+
+
+@app.post("/payment-plans/{loan_id}/installments/{installment_no}")
+def update_payment_installment(
+    loan_id: str,
+    installment_no: int,
+    status_request: InstallmentStatusRequest,
+) -> dict:
+    """Odeme planindaki tek taksitin durumunu gunceller."""
+
+    payment_plan = get_payment_plan(loan_id, store_path=PAYMENT_STORE_PATH)
+    if not payment_plan:
+        raise HTTPException(status_code=404, detail="Ödeme planı bulunamadı.")
+
+    try:
+        updated_plan = update_installment_status(
+            payment_plan,
+            installment_no=installment_no,
+            status=status_request.status,
+            paid_date=status_request.paid_date,
+            note=status_request.note,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    save_payment_plan(updated_plan, store_path=PAYMENT_STORE_PATH)
+    return updated_plan
+
+
+@app.post("/payment-plans/{loan_id}/assistant")
+def ask_payment_assistant(loan_id: str, assistant_request: PaymentAssistantRequest) -> dict:
+    """Odeme plani uzerinden kontrollu asistan cevabi uretir."""
+
+    payment_plan = get_payment_plan(loan_id, store_path=PAYMENT_STORE_PATH)
+    if not payment_plan:
+        raise HTTPException(status_code=404, detail="Ödeme planı bulunamadı.")
+
+    today = _parse_optional_date(assistant_request.today, field_name="today")
+    if assistant_request.message.strip():
+        return answer_payment_message(payment_plan, assistant_request.message, today=today)
+
+    question_type = assistant_request.question_type.strip() or "summary"
+    return answer_payment_question(payment_plan, question_type, today=today)
+
+
 @app.get("/reports/{analysis_id}/{report_type}")
 def download_report(analysis_id: str, report_type: str) -> FileResponse:
     """Analiz ID'sine göre JSON veya Markdown raporunu indirir."""
@@ -194,6 +309,18 @@ def download_report(analysis_id: str, report_type: str) -> FileResponse:
         media_type=media_type,
         filename=report_path.name,
     )
+
+
+def _parse_optional_date(value: str, field_name: str) -> date | None:
+    """Bos olmayan ISO tarih metnini date nesnesine cevirir."""
+
+    if not value.strip():
+        return None
+
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=f"{field_name} YYYY-AA-GG formatında olmalı.") from error
 
 
 def _validate_document_count(documents: list[UploadFile]) -> None:

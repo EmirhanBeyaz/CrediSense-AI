@@ -12,6 +12,7 @@ from datetime import date
 
 
 DEFAULT_MONTHLY_INTEREST_RATE = 0.025
+INSTALLMENT_STATUSES = {"pending", "paid", "overdue"}
 
 
 def build_payment_plan(
@@ -64,7 +65,50 @@ def build_payment_plan(
         "total_interest": total_interest,
         "first_due_date": due_date.isoformat(),
         "schedule": schedule,
+        "payment_summary": _payment_summary(schedule, principal=principal),
     }
+
+
+def update_installment_status(
+    payment_plan: dict,
+    installment_no: int,
+    status: str,
+    paid_date: str = "",
+    note: str = "",
+) -> dict:
+    """Odeme planindaki tek taksitin durumunu gunceller.
+
+    Bu fonksiyon gercek para tahsilati yapmaz. Sadece urun akisinda taksit durumunu takip etmek
+    icin plan verisini gunceller.
+    """
+
+    if status not in INSTALLMENT_STATUSES:
+        valid_statuses = ", ".join(sorted(INSTALLMENT_STATUSES))
+        raise ValueError(f"Gecersiz taksit durumu: {status}. Gecerli durumlar: {valid_statuses}")
+
+    updated_plan = dict(payment_plan)
+    updated_schedule: list[dict] = []
+    installment_found = False
+
+    for installment in payment_plan.get("schedule", []):
+        updated_installment = dict(installment)
+        if int(updated_installment.get("installment_no", 0)) == int(installment_no):
+            installment_found = True
+            updated_installment["status"] = status
+            updated_installment["paid_date"] = paid_date if status == "paid" else ""
+            updated_installment["note"] = note
+
+        updated_schedule.append(updated_installment)
+
+    if not installment_found:
+        raise ValueError(f"Taksit bulunamadi: {installment_no}")
+
+    updated_plan["schedule"] = updated_schedule
+    updated_plan["payment_summary"] = _payment_summary(
+        updated_schedule,
+        principal=_to_float(updated_plan.get("principal")),
+    )
+    return updated_plan
 
 
 def _ensure_application_is_approved(application_record: dict) -> None:
@@ -127,6 +171,40 @@ def _build_schedule(
         )
 
     return schedule
+
+
+def _payment_summary(schedule: list[dict], principal: float = 0.0) -> dict:
+    """Taksit listesi uzerinden kisa odeme ozeti uretir."""
+
+    paid_count = 0
+    overdue_count = 0
+    pending_count = 0
+    remaining_principal = 0.0
+
+    for installment in schedule:
+        status = installment.get("status", "pending")
+        if status == "paid":
+            paid_count += 1
+            remaining_principal = _to_float(installment.get("remaining_principal"))
+        elif status == "overdue":
+            overdue_count += 1
+        else:
+            pending_count += 1
+
+    if paid_count == 0:
+        remaining_principal = principal
+
+    total_count = len(schedule)
+    progress_ratio = paid_count / total_count if total_count else 0.0
+
+    return {
+        "total_installment_count": total_count,
+        "paid_installment_count": paid_count,
+        "pending_installment_count": pending_count,
+        "overdue_installment_count": overdue_count,
+        "payment_progress_ratio": round(progress_ratio, 2),
+        "remaining_principal_after_last_payment": round(remaining_principal, 2),
+    }
 
 
 def _loan_id(application_id: str) -> str:

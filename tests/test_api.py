@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend.credisense.api import app
+from backend.credisense.basvuru_deposu import save_application_record
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -102,6 +103,51 @@ def test_download_report_returns_404_for_unknown_analysis_id() -> None:
     assert response.json()["error"]["code"] == "not_found"
 
 
+def test_payment_plan_endpoints_for_approved_application(tmp_path, monkeypatch) -> None:
+    application_store = tmp_path / "applications.db"
+    payment_store = tmp_path / "payment_plans.db"
+    monkeypatch.setattr("backend.credisense.api.APPLICATION_STORE_PATH", application_store)
+    monkeypatch.setattr("backend.credisense.api.PAYMENT_STORE_PATH", payment_store)
+    save_application_record(_approved_application_record(), store_path=application_store)
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/applications/APP-20260512-TEST0001/payment-plan",
+        json={
+            "monthly_interest_rate": 0.02,
+            "first_due_date": "2026-06-15",
+        },
+    )
+
+    assert create_response.status_code == 200
+    payment_plan = create_response.json()
+    loan_id = payment_plan["loan_id"]
+    assert payment_plan["application_id"] == "APP-20260512-TEST0001"
+    assert payment_plan["schedule"][0]["due_date"] == "2026-06-15"
+
+    get_response = client.get(f"/payment-plans/{loan_id}")
+    assert get_response.status_code == 200
+    assert get_response.json()["loan_id"] == loan_id
+
+    update_response = client.post(
+        f"/payment-plans/{loan_id}/installments/1",
+        json={
+            "status": "paid",
+            "paid_date": "2026-06-14",
+            "note": "Mobil odeme",
+        },
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["schedule"][0]["status"] == "paid"
+
+    assistant_response = client.post(
+        f"/payment-plans/{loan_id}/assistant",
+        json={"message": "Kalan borcum ne kadar?", "today": "2026-06-20"},
+    )
+    assert assistant_response.status_code == 200
+    assert assistant_response.json()["intent"] == "remaining_debt"
+
+
 class _open_sample_files:
     def __enter__(self):
         self._handles = [path.open("rb") for path in SAMPLE_FILES]
@@ -113,3 +159,20 @@ class _open_sample_files:
     def __exit__(self, exc_type, exc, traceback):
         for handle in self._handles:
             handle.close()
+
+
+def _approved_application_record() -> dict:
+    return {
+        "application_id": "APP-20260512-TEST0001",
+        "created_at": "2026-05-12T10:30:00",
+        "current_status": {
+            "status_code": "APPROVED",
+            "status_text": "Kredi onaylandı",
+            "is_final": True,
+        },
+        "credit_request": {
+            "requested_amount": 250000,
+            "term_months": 36,
+        },
+        "status_history": [],
+    }

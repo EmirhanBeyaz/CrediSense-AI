@@ -103,6 +103,61 @@ GET /reports/{analysis_id}/json
 GET /reports/{analysis_id}/md
 ```
 
+Analiz sonucu varsayilan olarak yerel basvuru deposuna kaydedilir. Urun akisi icin kullanilan
+basvuru endpoint'leri:
+
+```text
+GET /applications
+GET /applications/{application_id}
+POST /applications/{application_id}/decision
+```
+
+`POST /applications/{application_id}/decision` icin ornek govde:
+
+```json
+{
+  "decision_type": "request_extra_document",
+  "note": "Gelir belgesi yenilenmeli.",
+  "actor": "bank_user",
+  "requested_documents": ["Guncel gelir belgesi"]
+}
+```
+
+Desteklenen karar tipleri: `approve`, `reject`, `request_extra_document`, `send_to_deep_review`.
+Basvuru kayitlari varsayilan olarak `veri/basvuru_kayitlari.db` SQLite dosyasinda tutulur.
+
+Kredi onaylandiktan sonra odeme plani ve odeme asistani akisi:
+
+```text
+POST /applications/{application_id}/payment-plan
+GET /payment-plans
+GET /payment-plans/{loan_id}
+POST /payment-plans/{loan_id}/installments/{installment_no}
+POST /payment-plans/{loan_id}/assistant
+```
+
+Odeme asistani iki sekilde kullanilabilir:
+
+```json
+{
+  "question_type": "next_payment",
+  "today": "2026-06-20"
+}
+```
+
+veya:
+
+```json
+{
+  "message": "Kalan borcum ne kadar?",
+  "today": "2026-06-20"
+}
+```
+
+Desteklenen soru tipleri: `summary`, `next_payment`, `payment_status`, `remaining_debt`,
+`early_payment`, `late_payment`, `overdue_payments`, `change_due_date`.
+Odeme planlari varsayilan olarak `veri/odeme_planlari.db` SQLite dosyasinda tutulur.
+
 API hata cevapları şu ortak gövdeyi kullanır:
 
 ```json

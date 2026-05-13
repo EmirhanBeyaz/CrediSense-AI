@@ -236,6 +236,36 @@ http://127.0.0.1:8000/reports/{analysis_id}/json
 http://127.0.0.1:8000/reports/{analysis_id}/md
 ```
 
+Analiz sonucu varsayilan olarak yerel basvuru deposuna kaydedilir. Bu depo urun akisi icin
+basvuru takibi ve banka karari isleme amaciyla kullanilir:
+
+```text
+http://127.0.0.1:8000/applications
+http://127.0.0.1:8000/applications/{application_id}
+http://127.0.0.1:8000/applications/{application_id}/decision
+```
+
+`POST /applications/{application_id}/decision` endpoint'i su karar tiplerini destekler:
+`approve`, `reject`, `request_extra_document`, `send_to_deep_review`.
+
+Kredi onaylandiktan sonra odeme plani ve odeme asistani endpoint'leri kullanilir:
+
+```text
+http://127.0.0.1:8000/applications/{application_id}/payment-plan
+http://127.0.0.1:8000/payment-plans
+http://127.0.0.1:8000/payment-plans/{loan_id}
+http://127.0.0.1:8000/payment-plans/{loan_id}/installments/{installment_no}
+http://127.0.0.1:8000/payment-plans/{loan_id}/assistant
+```
+
+Odeme asistani `question_type` ile kontrollu soru alabilir veya `message` alanindaki serbest metni
+basit kurallarla siniflandirabilir. Desteklenen soru tipleri: `summary`, `next_payment`,
+`payment_status`, `remaining_debt`, `early_payment`, `late_payment`, `overdue_payments`,
+`change_due_date`. Odeme planlari varsayilan olarak `veri/odeme_planlari.db` SQLite dosyasinda
+tutulur.
+
+Basvuru kayitlari varsayilan olarak `veri/basvuru_kayitlari.db` SQLite dosyasinda tutulur.
+
 Örnek:
 
 ```text
