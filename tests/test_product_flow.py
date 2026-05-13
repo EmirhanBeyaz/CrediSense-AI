@@ -34,3 +34,27 @@ def test_product_flow_routes_pre_approved_application() -> None:
     assert result["application_status"]["is_final"] is True
     assert result["bank_view"]["recommended_action"] == "Belge ve skor özetini kontrol edip ön onayı kesinleştir."
     assert "approve" in result["bank_view"]["allowed_decisions"]
+
+
+def test_product_flow_sends_form_document_mismatch_to_manual_review() -> None:
+    result = build_product_outputs(
+        package_quality={"can_continue": True, "quality_score": 1.0},
+        form_quality={"is_valid": True, "quality_score": 1.0},
+        consent_quality={"is_valid": True},
+        form_document_consistency={
+            "is_consistent": False,
+            "score": 0.75,
+            "flags": ["Formdaki ad-soyad kimlik belgesiyle uyumsuz."],
+        },
+        risk={
+            "risk_score": 0.25,
+            "risk_level": "DÃ¼ÅŸÃ¼k",
+            "decision_summary": {"decision_code": "PRE_APPROVED"},
+            "reasons": [],
+        },
+        consistency={"consistency_score": 1.0, "anomaly_score": 0.0},
+    )
+
+    assert result["application_status"]["status_code"] == "MANUAL_REVIEW"
+    assert result["bank_view"]["form_document_consistency_score"] == 0.75
+    assert "Formdaki ad-soyad kimlik belgesiyle uyumsuz." in result["bank_view"]["blockers"]

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .basvuru_kaydi import build_application_record
+from .katman_00_form_belge_tutarlilik import evaluate_form_document_consistency
 from .katman_00_basvuru_paketi import evaluate_application_package
 from .katman_00_form_dogrulama import validate_application_form
 from .katman_00_onay_kontrolu import validate_consents
@@ -52,13 +53,20 @@ def analyze_documents(
     parsed_documents = _read_and_parse_documents(pdf_paths)
     package_quality = evaluate_application_package(parsed_documents, form)
     form_quality = validate_application_form(form)
-    consent_quality = validate_consents(form)
+    consent_quality = validate_consents(form, has_consent_document=_has_consent_document(parsed_documents))
+    form_document_consistency = evaluate_form_document_consistency(
+        form,
+        parsed_documents.identity,
+        parsed_documents.payroll,
+        parsed_documents.bank_statement,
+    )
     consistency = evaluate_consistency(
         parsed_documents.identity,
         parsed_documents.payroll,
         parsed_documents.bank_statement,
     )
     features = _build_features(parsed_documents, consistency, form)
+    features["form_document_consistency_score"] = form_document_consistency.score
     risk = score_application(
         features=features,
         consistency_score=consistency.consistency_score,
@@ -69,12 +77,14 @@ def analyze_documents(
     package_quality_dict = asdict(package_quality)
     form_quality_dict = asdict(form_quality)
     consent_quality_dict = asdict(consent_quality)
+    form_document_consistency_dict = asdict(form_document_consistency)
     consistency_dict = asdict(consistency)
     risk_dict = asdict(risk)
     product_outputs = build_product_outputs(
         package_quality=package_quality_dict,
         form_quality=form_quality_dict,
         consent_quality=consent_quality_dict,
+        form_document_consistency=form_document_consistency_dict,
         risk=risk_dict,
         consistency=consistency_dict,
     )
@@ -85,6 +95,7 @@ def analyze_documents(
         "application_package_quality": package_quality_dict,
         "application_form_quality": form_quality_dict,
         "consent_quality": consent_quality_dict,
+        "form_document_consistency": form_document_consistency_dict,
         "application_status": product_outputs["application_status"],
         "user_view": product_outputs["user_view"],
         "bank_view": product_outputs["bank_view"],
@@ -137,6 +148,12 @@ def _read_and_parse_documents(pdf_paths: Iterable[str | Path]) -> ParsedDocument
             parsed.bank_statement = parse_bank_statement(text)
 
     return parsed
+
+
+def _has_consent_document(parsed: ParsedDocuments) -> bool:
+    """Yüklenen PDF'ler arasında açık rıza/KVKK belgesi var mı kontrol eder."""
+
+    return any(item.get("document_type") == "consent" for item in parsed.document_quality)
 
 
 def _build_features(
@@ -299,9 +316,15 @@ def _age_from_birth_date(birth_date: str) -> int:
     if not birth_date:
         return 0
 
-    try:
-        parsed_birth_date = datetime.strptime(birth_date, "%d.%m.%Y").date()
-    except ValueError:
+    parsed_birth_date = None
+    for date_format in ["%d.%m.%Y", "%Y-%m-%d"]:
+        try:
+            parsed_birth_date = datetime.strptime(birth_date, date_format).date()
+            break
+        except ValueError:
+            continue
+
+    if parsed_birth_date is None:
         return 0
 
     today = date.today()

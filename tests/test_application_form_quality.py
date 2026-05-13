@@ -22,16 +22,27 @@ def test_missing_required_application_form_fields_are_reported() -> None:
 
 def test_invalid_application_form_values_are_reported() -> None:
     form = _valid_form()
-    form["dogum_tarihi"] = "1992-04-12"
+    form["dogum_tarihi"] = "12/04/1992"
     form["talep_edilen_kredi_tutari"] = -50000
     form["vade_ay"] = 180
 
     result = validate_application_form(form)
 
     assert result.is_valid is False
-    assert "dogum_tarihi: GG.AA.YYYY formatında olmalı" in result.invalid_fields
+    assert "dogum_tarihi: GG.AA.YYYY veya YYYY-AA-GG formatında olmalı" in result.invalid_fields
     assert "talep_edilen_kredi_tutari: negatif olamaz" in result.invalid_fields
     assert "vade_ay: 120 aydan büyük olamaz" in result.invalid_fields
+
+
+def test_application_form_accepts_new_test_id_and_iso_birth_date() -> None:
+    form = _valid_form()
+    form["tckn_test_no"] = "TEST-TCKN-000006"
+    form["dogum_tarihi"] = "1991-04-22"
+
+    result = validate_application_form(form)
+
+    assert result.is_valid is True
+    assert result.invalid_fields == []
 
 
 def _valid_form() -> dict:

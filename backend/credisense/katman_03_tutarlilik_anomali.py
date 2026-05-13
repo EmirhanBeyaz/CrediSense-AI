@@ -180,7 +180,8 @@ def _has_employer_in_salary_description(salary_inflows: list, employer: str) -> 
 
     for transaction in salary_inflows:
         description = _normalize_text(transaction.description)
-        if normalized_employer in description:
+        short_employer = _short_company_name(normalized_employer)
+        if normalized_employer in description or (short_employer and short_employer in description):
             return True
     return False
 
@@ -226,6 +227,16 @@ def _normalize_text(value: str) -> str:
     translation_table = str.maketrans("ÇĞİÖŞÜçğıöşü", "CGIOSUcgiosu")
     normalized = value.translate(translation_table).lower()
     return " ".join(normalized.split())
+
+
+def _short_company_name(value: str) -> str:
+    """Şirket unvan eklerini sadeleştirerek maaş açıklamasıyla eşleşmeyi kolaylaştırır."""
+
+    cleaned = value.replace("a.s.", "").replace("a.ş.", "").replace("ltd.", "")
+    cleaned = cleaned.replace("sti.", "").replace("şti.", "")
+    cleaned = cleaned.replace("ltd sti", "").replace("ltd şti", "")
+    cleaned = cleaned.replace("anonim sirketi", "").replace("limited sirketi", "")
+    return " ".join(cleaned.split())
 
 
 def _parse_documents_for_test(pdf_paths: list[str]) -> tuple[IdentityInfo | None, PayrollInfo | None, BankStatementInfo | None]:

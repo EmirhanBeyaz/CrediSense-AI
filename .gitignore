@@ -30,6 +30,9 @@ raporlar/*.json
 raporlar/*.md
 !raporlar/README.md
 
+# Local application records
+veri/basvuru_kayitlari*.json
+
 # Trained model artifacts
 modeller/*.pkl
 modeller/*.joblib

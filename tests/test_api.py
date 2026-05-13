@@ -24,7 +24,8 @@ def test_health_endpoint() -> None:
     assert response.json()["status"] == "ok"
 
 
-def test_analyze_endpoint_with_sample_documents() -> None:
+def test_analyze_endpoint_with_sample_documents(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("backend.credisense.api.APPLICATION_STORE_PATH", tmp_path / "applications.json")
     client = TestClient(app)
 
     with _open_sample_files() as files:
@@ -55,6 +56,23 @@ def test_analyze_endpoint_with_sample_documents() -> None:
 
     report_response = client.get(f"/reports/{payload['analysis_id']}/md")
     assert report_response.status_code == 200
+    stored_response = client.get(f"/applications/{payload['application_id']}")
+    assert stored_response.status_code == 200
+    assert stored_response.json()["application_id"] == payload["application_id"]
+
+    list_response = client.get("/applications")
+    assert list_response.status_code == 200
+    assert list_response.json()["count"] == 1
+
+    decision_response = client.post(
+        f"/applications/{payload['application_id']}/decision",
+        json={
+            "decision_type": "request_extra_document",
+            "requested_documents": ["Güncel gelir belgesi"],
+        },
+    )
+    assert decision_response.status_code == 200
+    assert decision_response.json()["current_status"]["status_code"] == "EXTRA_DOCUMENT_REQUESTED"
     assert "CrediSense AI Başvuru Analiz Raporu" in report_response.text
 
 

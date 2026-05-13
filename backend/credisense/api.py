@@ -18,15 +18,28 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
 
 from .analiz_akisi import analyze_documents
+from .banka_kararlari import apply_bank_decision
+from .basvuru_deposu import DEFAULT_APPLICATION_STORE, get_application_record, list_application_records, save_application_record
 from .rapor_uret import create_analysis_reports, report_files_to_dict
 
 
 APP_VERSION = "0.1.0"
 DEFAULT_DATASET_PATH = Path("veri") / "sentetik_kredi_basvuru_veri_seti.csv"
 REPORT_FOLDER = Path("raporlar")
+APPLICATION_STORE_PATH = DEFAULT_APPLICATION_STORE
 MAX_DOCUMENT_COUNT = 10
+
+
+class BankDecisionRequest(BaseModel):
+    """Banka uzmanı karar isteği."""
+
+    decision_type: str = Field(description="approve, reject, request_extra_document veya send_to_deep_review")
+    note: str = ""
+    actor: str = "bank_user"
+    requested_documents: list[str] = Field(default_factory=list)
 
 app = FastAPI(
     title="CrediSense AI API",
@@ -79,6 +92,10 @@ async def analyze(
         bool,
         Form(description="Analiz sonucu JSON ve Markdown raporu üretilsin mi?"),
     ] = False,
+    save_application: Annotated[
+        bool,
+        Form(description="Başvuru kaydı ürün deposuna yazılsın mı?"),
+    ] = True,
 ) -> dict:
     """Yüklenen PDF belgelerini ve başvuru formunu analiz eder."""
 
@@ -109,7 +126,55 @@ async def analyze(
             )
             result["report_files"] = report_files_to_dict(report_files)
 
+        if save_application:
+            save_application_record(result["application_record"], store_path=APPLICATION_STORE_PATH)
+
         return result
+
+
+@app.get("/applications")
+def list_applications(limit: int = 50) -> dict:
+    """Kayıt deposundaki son başvuruları listeler."""
+
+    safe_limit = max(1, min(limit, 100))
+    records = list_application_records(store_path=APPLICATION_STORE_PATH, limit=safe_limit)
+    return {
+        "count": len(records),
+        "applications": records,
+    }
+
+
+@app.get("/applications/{application_id}")
+def get_application(application_id: str) -> dict:
+    """Başvuru ID değerine göre ürün kaydını döndürür."""
+
+    record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
+    if not record:
+        raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
+    return record
+
+
+@app.post("/applications/{application_id}/decision")
+def decide_application(application_id: str, decision_request: BankDecisionRequest) -> dict:
+    """Banka uzmanı kararını mevcut başvuru kaydına işler."""
+
+    record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
+    if not record:
+        raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
+
+    try:
+        updated_record = apply_bank_decision(
+            record,
+            decision_type=decision_request.decision_type,
+            note=decision_request.note,
+            actor=decision_request.actor,
+            requested_documents=decision_request.requested_documents,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    save_application_record(updated_record, store_path=APPLICATION_STORE_PATH)
+    return updated_record
 
 
 @app.get("/reports/{analysis_id}/{report_type}")

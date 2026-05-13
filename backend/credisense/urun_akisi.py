@@ -20,13 +20,16 @@ def build_product_outputs(
     consent_quality: dict,
     risk: dict,
     consistency: dict,
+    form_document_consistency: dict | None = None,
 ) -> dict:
     """Analiz sonucundan ürün ekranlarının kullanacağı özet çıktıları üretir."""
 
+    form_document_consistency = form_document_consistency or {}
     status_code = _application_status_code(
         package_quality=package_quality,
         form_quality=form_quality,
         consent_quality=consent_quality,
+        form_document_consistency=form_document_consistency,
         risk=risk,
     )
 
@@ -38,6 +41,7 @@ def build_product_outputs(
             package_quality=package_quality,
             form_quality=form_quality,
             consent_quality=consent_quality,
+            form_document_consistency=form_document_consistency,
             risk=risk,
             consistency=consistency,
         ),
@@ -48,6 +52,7 @@ def _application_status_code(
     package_quality: dict,
     form_quality: dict,
     consent_quality: dict,
+    form_document_consistency: dict,
     risk: dict,
 ) -> str:
     """Başvurunun ürün durum kodunu belirler."""
@@ -60,6 +65,9 @@ def _application_status_code(
 
     if not form_quality.get("is_valid", False):
         return "FORM_REVISION_REQUIRED"
+
+    if form_document_consistency and not form_document_consistency.get("is_consistent", False):
+        return "MANUAL_REVIEW"
 
     decision_code = risk.get("decision_summary", {}).get("decision_code", "")
     if decision_code == "PRE_APPROVED":
@@ -116,6 +124,7 @@ def _bank_view(
     package_quality: dict,
     form_quality: dict,
     consent_quality: dict,
+    form_document_consistency: dict,
     risk: dict,
     consistency: dict,
 ) -> dict:
@@ -133,11 +142,13 @@ def _bank_view(
         "model_name": risk.get("model_name", ""),
         "package_quality_score": package_quality.get("quality_score"),
         "form_quality_score": form_quality.get("quality_score"),
+        "form_document_consistency_score": form_document_consistency.get("score"),
+        "form_document_flags": form_document_consistency.get("flags", []),
         "consent_valid": consent_quality.get("is_valid", False),
         "consistency_score": consistency.get("consistency_score"),
         "anomaly_score": consistency.get("anomaly_score"),
         "main_reasons": risk.get("reasons", [])[:5],
-        "blockers": _bank_blockers(package_quality, form_quality, consent_quality),
+        "blockers": _bank_blockers(package_quality, form_quality, consent_quality, form_document_consistency),
         "allowed_decisions": allowed_bank_decisions(status_code),
     }
 
@@ -182,7 +193,12 @@ def _bank_recommended_action(status_code: str) -> str:
     return actions.get(status_code, "Başvuruyu manuel kontrol et.")
 
 
-def _bank_blockers(package_quality: dict, form_quality: dict, consent_quality: dict) -> list[str]:
+def _bank_blockers(
+    package_quality: dict,
+    form_quality: dict,
+    consent_quality: dict,
+    form_document_consistency: dict,
+) -> list[str]:
     """Banka tarafında iş akışını durduran veya yavaşlatan maddeleri toparlar."""
 
     blockers: list[str] = []
@@ -193,5 +209,6 @@ def _bank_blockers(package_quality: dict, form_quality: dict, consent_quality: d
     blockers.extend(package_quality.get("failed_pdf_extractions", []))
     blockers.extend(form_quality.get("missing_required_fields", []))
     blockers.extend(form_quality.get("invalid_fields", []))
+    blockers.extend(form_document_consistency.get("flags", []))
 
     return blockers

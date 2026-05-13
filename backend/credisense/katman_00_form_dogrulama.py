@@ -13,6 +13,7 @@ Amaç:
 Bu katman kredi riski kararı vermez. Sadece "form sağlıklı mı?" sorusunu cevaplar.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -143,8 +144,8 @@ def _identity_field_errors(form: dict) -> list[str]:
     invalid_fields: list[str] = []
 
     test_id = str(form.get("tckn_test_no", "")).strip()
-    if test_id and (not test_id.isdigit() or len(test_id) != 11):
-        invalid_fields.append("tckn_test_no: 11 haneli sayısal test no olmalı")
+    if test_id and not _is_valid_test_id(test_id):
+        invalid_fields.append("tckn_test_no: 11 haneli sayı veya TEST-TCKN-000000 formatında olmalı")
 
     full_name = str(form.get("ad_soyad", "")).strip()
     if full_name and len(full_name.split()) < 2:
@@ -162,7 +163,7 @@ def _birth_date_errors(form: dict) -> list[str]:
 
     birth_date = _parse_date(birth_date_text)
     if birth_date is None:
-        return ["dogum_tarihi: GG.AA.YYYY formatında olmalı"]
+        return ["dogum_tarihi: GG.AA.YYYY veya YYYY-AA-GG formatında olmalı"]
 
     age = _calculate_age(birth_date)
     if age < MINIMUM_AGE:
@@ -224,12 +225,23 @@ def _quality_score(
 
 
 def _parse_date(value: str) -> date | None:
-    """`12.04.1992` biçimindeki tarihi date nesnesine çevirir."""
+    """Desteklenen doğum tarihi formatlarını date nesnesine çevirir."""
 
-    try:
-        return datetime.strptime(value, "%d.%m.%Y").date()
-    except ValueError:
-        return None
+    for date_format in ["%d.%m.%Y", "%Y-%m-%d"]:
+        try:
+            return datetime.strptime(value, date_format).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _is_valid_test_id(value: str) -> bool:
+    """Formdaki test kimlik numarasının kabul edilen formatta olup olmadığını kontrol eder."""
+
+    if value.isdigit() and len(value) == 11:
+        return True
+
+    return bool(re.fullmatch(r"TEST-TCKN-\d{6}", value, re.I))
 
 
 def _calculate_age(birth_date: date) -> int:

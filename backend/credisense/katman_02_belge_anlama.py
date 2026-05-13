@@ -110,6 +110,8 @@ def understand_document_text(text: str) -> DocumentUnderstandingResult:
             "transaction_count": len(bank_statement.transactions),
             "transactions": [asdict(transaction) for transaction in bank_statement.transactions],
         }
+    elif document_type == "consent":
+        fields = parse_consent_document(text)
     else:
         fields = {}
 
@@ -131,15 +133,45 @@ def detect_document_type(text: str) -> str:
     scores = {
         "identity": _keyword_score(
             normalized_text,
-            ["kimlik bilgileri", "kisi bilgileri", "test kimlik no", "dogum tarihi"],
+            [
+                "kimlik bilgileri",
+                "test kimlik belgesi",
+                "kisi bilgileri",
+                "test kimlik no",
+                "tckn test no",
+                "dogum tarihi",
+            ],
         ),
         "payroll": _keyword_score(
             normalized_text,
-            ["maas bordrosu", "net odenecek", "brut ucret", "kesinti bilgileri"],
+            [
+                "maas bordrosu",
+                "gelir belgesi",
+                "net odenecek",
+                "net maas",
+                "brut ucret",
+                "kesinti bilgileri",
+                "isveren adi",
+                "bordro donemi",
+            ],
         ),
         "bank_statement": _keyword_score(
             normalized_text,
-            ["hesap hareketleri", "hesap sahibi", "toplam gelen", "toplam giden"],
+            [
+                "banka hesap dokumu",
+                "hesap hareketleri",
+                "hesap sahibi",
+                "musteri",
+                "toplam gelen",
+                "toplam giden",
+                "giris",
+                "cikis",
+                "bakiye",
+            ],
+        ),
+        "consent": _keyword_score(
+            normalized_text,
+            ["acik riza", "kvkk onayi", "veri isleme", "onay durumu", "kabul edildi"],
         ),
     }
 
@@ -159,7 +191,7 @@ def parse_identity(text: str) -> IdentityInfo:
     return IdentityInfo(
         full_name=_find_identity_name(text),
         test_id=_find_test_id(text),
-        birth_date=_find_date_after_label(text, "Dogum Tarihi"),
+        birth_date=_find_birth_date(text),
     )
 
 
@@ -167,7 +199,11 @@ def parse_payroll(text: str) -> PayrollInfo:
     """Maaş bordrosundan çalışan ve maaş bilgilerini çıkarır."""
 
     return PayrollInfo(
-        full_name=_value_after_label(text, "Ad Soyad"),
+        full_name=_first_non_empty(
+            _value_after_label(text, "Çalışan Ad Soyad"),
+            _value_after_label(text, "Calisan Ad Soyad"),
+            _value_after_label(text, "Ad Soyad"),
+        ),
         employer=_find_company_name(text),
         period=_find_payroll_period(text),
         net_salary=_find_net_salary(text),
@@ -178,12 +214,32 @@ def parse_bank_statement(text: str) -> BankStatementInfo:
     """Banka hesap dökümünden hesap sahibi ve işlem listesini çıkarır."""
 
     return BankStatementInfo(
-        full_name=_value_after_label(text, "Ad Soyad"),
+        full_name=_first_non_empty(
+            _value_after_label(text, "Ad Soyad"),
+            _find_bank_customer_name(text),
+            _value_after_label(text, "Hesap Sahibi"),
+        ),
         test_id=_find_test_id(text),
-        iban=_value_after_label(text, "IBAN"),
+        iban=_first_non_empty(
+            _value_after_label(text, "Hesap No / IBAN"),
+            _value_after_label(text, "IBAN"),
+        ),
         period=_find_bank_statement_period(text),
         transactions=_parse_transactions(text),
     )
+
+
+def parse_consent_document(text: str) -> dict:
+    """KVKK/açık rıza metninden temel onay bilgisini çıkarır."""
+
+    return {
+        "full_name": _first_non_empty(
+            _value_after_label(text, "Ad Soyad"),
+            _find_name_before_test_id(text),
+        ),
+        "test_id": _find_test_id(text),
+        "consent_status": _find_consent_status(text),
+    }
 
 
 def parse_money(value: str) -> float:
@@ -195,6 +251,8 @@ def parse_money(value: str) -> float:
     """
 
     cleaned_value = value.strip().replace("TL", "").replace(" ", "")
+    if cleaned_value in {"", "-"}:
+        return 0.0
     if "," in cleaned_value:
         cleaned_value = cleaned_value.replace(".", "").replace(",", ".")
 
@@ -217,8 +275,8 @@ def _parse_transactions(text: str) -> list[Transaction]:
     transaction_pattern = re.compile(
         r"(?P<date>\d{2}\.\d{2}\.\d{4})\s+"
         r"(?P<description>.+?)\s+"
-        r"(?P<inflow>\d{1,3}(?:\.\d{3})*,\d{2}|0,00)\s+"
-        r"(?P<outflow>\d{1,3}(?:\.\d{3})*,\d{2}|0,00)\s+"
+        r"(?P<inflow>\d{1,3}(?:\.\d{3})*,\d{2}|0,00|-)\s+(?:TL\s+)?"
+        r"(?P<outflow>\d{1,3}(?:\.\d{3})*,\d{2}|0,00|-)\s+(?:TL\s+)?"
         r"(?P<balance>\d{1,3}(?:\.\d{3})*,\d{2}|0,00)"
     )
 
@@ -247,27 +305,58 @@ def _find_identity_name(text: str) -> str:
     return table_match.group(1) if table_match else ""
 
 
+def _find_bank_customer_name(text: str) -> str:
+    """Banka dökümündeki müşteri adını bulur."""
+
+    customer_name = _first_non_empty(
+        _value_after_label(text, "Müşteri"),
+        _value_after_label(text, "Musteri"),
+    )
+    if customer_name.lower() in {"bilgileri", "bilgi"}:
+        return ""
+    return customer_name
+
+
 def _find_test_id(text: str) -> str:
     """Metin içindeki 11 haneli sentetik kimlik numarasını bulur."""
 
     match = re.search(
-        r"(?:TCKN(?:\s+Benzeri)?(?:\s+Test\s+No)?|Test\s+Kimlik\s+No)\s+(\d{11})",
+        r"(?:TCKN(?:\s+Benzeri)?(?:\s+Test\s+No)?|Test\s+Kimlik\s+No)\s+([A-Z0-9-]{6,20}|\d{11})",
         text,
+        re.I,
     )
-    return match.group(1) if match else ""
+    if match:
+        return match.group(1)
+
+    fallback_match = re.search(r"\b(TEST-TCKN-\d{6})\b", text, re.I)
+    return fallback_match.group(1) if fallback_match else ""
+
+
+def _find_birth_date(text: str) -> str:
+    """Kimlik metninden doğum tarihini kabul edilen formatlardan biriyle bulur."""
+
+    return _first_non_empty(
+        _find_date_after_label(text, "Doğum Tarihi"),
+        _find_date_after_label(text, "Dogum Tarihi"),
+    )
 
 
 def _find_date_after_label(text: str, label: str) -> str:
     """Belirli bir etiketten sonra gelen tarihi bulur."""
 
-    match = re.search(re.escape(label) + r"\s+(\d{2}\.\d{2}\.\d{4})", text, re.I)
+    match = re.search(re.escape(label) + r"\s+(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})", text, re.I)
     return match.group(1) if match else ""
 
 
 def _find_net_salary(text: str) -> float:
     """Bordrodaki net ödenecek tutarı bulur."""
 
-    normal_value = _find_money_after_label(text, "Net Odenecek Tutar")
+    normal_value = _first_non_zero(
+        _find_money_after_label(text, "Net Ödenecek Tutar"),
+        _find_money_after_label(text, "Net Odenecek Tutar"),
+        _find_money_after_label(text, "Net Maaş"),
+        _find_money_after_label(text, "Net Maas"),
+    )
     if normal_value:
         return normal_value
 
@@ -294,6 +383,13 @@ def _find_money_after_label(text: str, label: str) -> float:
 def _find_payroll_period(text: str) -> str:
     """Bordro dönemini bulur. Örnek: 2026 / 03"""
 
+    label_value = _first_non_empty(
+        _value_after_label(text, "Bordro Dönemi"),
+        _value_after_label(text, "Bordro Donemi"),
+    )
+    if label_value:
+        return label_value
+
     match = re.search(r"(\d{4}\s*/\s*\d{2})", text)
     if not match:
         return ""
@@ -304,7 +400,7 @@ def _find_bank_statement_period(text: str) -> str:
     """Banka dökümü dönemini bulur."""
 
     period_match = re.search(
-        r"Donem:\s*(\d{2}\.\d{2}\.\d{4}\s*-\s*\d{2}\.\d{2}\.\d{4})",
+        r"(?:Dönem|Donem):?\s*(\d{2}\.\d{2}\.\d{4}\s*-\s*\d{2}\.\d{2}\.\d{4})",
         text,
         re.I,
     )
@@ -321,7 +417,12 @@ def _find_company_name(text: str) -> str:
     known_company_match = re.search(r"(Nova Veri Teknolojileri A\.S\.)", text)
     if known_company_match:
         return known_company_match.group(1)
-    return _value_after_label(text, "Isveren")
+    return _first_non_empty(
+        _value_after_label(text, "İşveren Adı"),
+        _value_after_label(text, "Isveren Adi"),
+        _value_after_label(text, "İşveren"),
+        _value_after_label(text, "Isveren"),
+    )
 
 
 def _value_after_label(text: str, label: str) -> str:
@@ -335,26 +436,46 @@ def _value_after_label(text: str, label: str) -> str:
         "TCKN",
         "Soyad",
         "Ad ",
+        "Adı",
+        "Adi",
         "Dogum",
+        "Doğum",
         "Belge",
         "Uyruk",
         "Departman",
         "Gorev",
+        "Görev",
         "Ise",
+        "İşe",
         "Calisma",
+        "Çalışma",
         "Banka",
         "IBAN",
         "Adres",
         "Telefon",
         "E-posta",
         "Donem",
+        "Dönem",
         "Duzenleme",
+        "Düzenleme",
         "Bordro",
         "Tarih",
         "Aciklama",
+        "Açıklama",
         "Para",
         "Hesap",
+        "Meslek",
+        "Brüt",
+        "Brut",
+        "Toplam",
+        "Net",
+        "Ödeme",
+        "Odeme",
+        "Çıkarılacak",
+        "Cikarilacak",
     ]
+
+    search_text = text.replace("|", " ")
 
     stop_pattern = "|".join(
         re.escape(stop_word) for stop_word in stop_words if stop_word.strip() != label.strip()
@@ -364,11 +485,11 @@ def _value_after_label(text: str, label: str) -> str:
         re.I,
     )
 
-    match = value_pattern.search(text)
+    match = value_pattern.search(search_text)
     if not match:
         return ""
 
-    value = match.group(1).strip(" :-")
+    value = match.group(1).strip(" :-|")
     return re.sub(r"\s+", " ", value).strip()
 
 
@@ -416,6 +537,7 @@ def _missing_fields(document_type: str, fields: dict) -> list[str]:
         "identity": ["full_name", "test_id", "birth_date"],
         "payroll": ["full_name", "employer", "period", "net_salary"],
         "bank_statement": ["full_name", "test_id", "iban", "period", "transaction_count"],
+        "consent": ["full_name", "test_id", "consent_status"],
     }
 
     if document_type == "unknown":
@@ -440,6 +562,40 @@ def _understanding_warnings(document_type: str, missing_fields: list[str]) -> li
         return []
 
     return [f"Eksik alanlar: {', '.join(missing_fields)}"]
+
+
+def _first_non_empty(*values: str) -> str:
+    """Verilen metinlerden ilk dolu olanı döndürür."""
+
+    for value in values:
+        if value:
+            return value
+    return ""
+
+
+def _first_non_zero(*values: float) -> float:
+    """Verilen sayılardan ilk 0 olmayanı döndürür."""
+
+    for value in values:
+        if value:
+            return value
+    return 0.0
+
+
+def _find_name_before_test_id(text: str) -> str:
+    """KVKK metnindeki 'Ben Ad Soyad (TEST-...)' kalıbından adı bulur."""
+
+    match = re.search(r"Ben\s+([A-Za-zÇĞİÖŞÜçğıöşü]+\s+[A-Za-zÇĞİÖŞÜçğıöşü]+)\s+\(", text)
+    return match.group(1) if match else ""
+
+
+def _find_consent_status(text: str) -> str:
+    """Açık rıza metninde onay durumunu bulur."""
+
+    normalized_text = _normalize_for_search(text)
+    if "kabul edildi" in normalized_text or "kabul ederim" in normalized_text:
+        return "accepted"
+    return ""
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ class ConsentQuality:
     warnings: list[str] = field(default_factory=list)
 
 
-def validate_consents(application_form: dict | None) -> ConsentQuality:
+def validate_consents(application_form: dict | None, has_consent_document: bool = False) -> ConsentQuality:
     """Başvuru formundaki zorunlu onay alanlarını kontrol eder."""
 
     form = application_form or {}
@@ -34,6 +34,9 @@ def validate_consents(application_form: dict | None) -> ConsentQuality:
     warnings: list[str] = []
 
     for consent_name in REQUIRED_CONSENT_FIELDS:
+        if consent_name not in form and _covered_by_consent_document(consent_name, form, has_consent_document):
+            continue
+
         if consent_name not in form:
             missing_consents.append(consent_name)
             continue
@@ -63,3 +66,15 @@ def _is_accepted(value) -> bool:
 
     text = str(value).strip().lower()
     return text in {"true", "1", "evet", "yes", "onaylandi", "onaylandı"}
+
+
+def _covered_by_consent_document(consent_name: str, form: dict, has_consent_document: bool) -> bool:
+    """Açık rıza PDF'i varsa veri işleme onayını form yerine belgeyle kabul eder."""
+
+    if consent_name != "veri_isleme_onayi":
+        return False
+
+    if not has_consent_document:
+        return False
+
+    return _is_accepted(form.get("kvkk_onayi"))

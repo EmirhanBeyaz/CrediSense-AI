@@ -16,6 +16,13 @@ def test_missing_consents_are_reported() -> None:
     assert result.missing_consents == ["kvkk_onayi", "veri_isleme_onayi"]
 
 
+def test_consent_document_can_cover_data_processing_consent() -> None:
+    result = validate_consents({"kvkk_onayi": True}, has_consent_document=True)
+
+    assert result.is_valid is True
+    assert result.missing_consents == []
+
+
 def test_rejected_consents_are_reported() -> None:
     result = validate_consents({"kvkk_onayi": True, "veri_isleme_onayi": False})
 
