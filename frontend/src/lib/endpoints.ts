@@ -1,0 +1,23 @@
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "/api/backend";
+
+export const endpoints = {
+  health: "/health",
+  login: "/auth/login",
+  register: "/auth/register",
+  verifyEmail: "/auth/verify-email",
+  resendVerification: "/auth/resend-verification",
+  me: "/auth/me",
+  myPaymentPlan: "/me/payment-plan",
+  documents: "/documents",
+  analyze: "/analyze",
+  applications: "/applications",
+  applicationDetail: (applicationId: string) => `/applications/${applicationId}`,
+  decision: (applicationId: string) => `/applications/${applicationId}/decision`,
+  paymentPlanForApplication: (applicationId: string) => `/applications/${applicationId}/payment-plan`,
+  paymentPlans: "/payment-plans",
+  paymentPlanDetail: (loanId: string) => `/payment-plans/${loanId}`,
+  installment: (loanId: string, installmentNo: number) => `/payment-plans/${loanId}/installments/${installmentNo}`,
+  assistant: (loanId: string) => `/payment-plans/${loanId}/assistant`,
+  reports: "/reports",
+  report: (analysisId: string, reportType: "json" | "md") => `/reports/${analysisId}/${reportType}`,
+};

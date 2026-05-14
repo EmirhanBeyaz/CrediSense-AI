@@ -20,6 +20,13 @@ htmlcov/
 venv/
 env/
 
+# Frontend dependencies/build output
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/dist/
+
 # Local environment files
 .env
 .env.*
@@ -34,6 +41,15 @@ raporlar/*.md
 veri/basvuru_kayitlari*.json
 veri/basvuru_kayitlari*.db
 veri/basvuru_kayitlari*.sqlite*
+veri/credisense_kullanicilar*.db
+veri/credisense_kullanicilar*.sqlite*
+veri/belge_kayitlari*.db
+veri/belge_kayitlari*.sqlite*
+veri/yuklenen_belgeler/
+veri/asistan_mesajlari*.db
+veri/asistan_mesajlari*.sqlite*
+veri/rapor_kayitlari*.db
+veri/rapor_kayitlari*.sqlite*
 veri/odeme_planlari*.db
 veri/odeme_planlari*.sqlite*
 
