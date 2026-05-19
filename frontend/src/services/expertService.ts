@@ -1,0 +1,98 @@
+import { apiRequest } from "@/lib/apiClient";
+import { demoApplications } from "@/lib/demoData";
+import { endpoints } from "@/lib/endpoints";
+import type { ApplicationRecord, ReportSummary } from "@/types";
+import { mapApplicationRecord } from "./mappers";
+
+type ApplicationScope = "all" | "auto" | "manual" | "pending" | "completed";
+
+export async function getExpertApplications(scope: ApplicationScope = "all"): Promise<ApplicationRecord[]> {
+  const path = scope === "all" ? endpoints.applications : `${endpoints.applications}?scope=${scope}`;
+  const response = await apiRequest<{ applications: unknown[] }>(path);
+  if (!response.data) {
+    return filterDemoApplications(scope);
+  }
+  return response.data.applications.map(mapApplicationRecord);
+}
+
+export async function getExpertApplicationDetail(applicationId: string): Promise<ApplicationRecord> {
+  const response = await apiRequest<unknown>(endpoints.applicationDetail(applicationId));
+  if (!response.data) {
+    return demoApplications.find((item) => item.application_id === applicationId) || demoApplications[0];
+  }
+  return mapApplicationRecord(response.data);
+}
+
+export async function approveApplication(applicationId: string, note = ""): Promise<ApplicationRecord> {
+  return sendDecision(applicationId, "approve", note);
+}
+
+export async function reviseApplication(applicationId: string, note = ""): Promise<ApplicationRecord> {
+  return sendDecision(applicationId, "revise", note);
+}
+
+export async function requestExtraDocument(applicationId: string, requestedDocuments: string[], note = ""): Promise<ApplicationRecord> {
+  return sendDecision(applicationId, "request_extra_document", note, requestedDocuments);
+}
+
+export async function rejectApplication(applicationId: string, note = ""): Promise<ApplicationRecord> {
+  return sendDecision(applicationId, "reject", note);
+}
+
+export async function createExpertReport(applicationId: string, title: string, content: string): Promise<ReportSummary> {
+  const response = await apiRequest<{ report: any }>(endpoints.expertReport(applicationId), {
+    method: "POST",
+    body: { title, content },
+  });
+
+  if (!response.data) {
+    return {
+      id: `RPT-LOCAL-${Date.now()}`,
+      applicationId,
+      title,
+      type: "Uzman kanaat raporu",
+      createdAt: new Date().toISOString(),
+      content,
+    };
+  }
+
+  return {
+    id: response.data.report.report_id,
+    applicationId: response.data.report.application_id,
+    title: response.data.report.title,
+    type: response.data.report.report_type,
+    createdAt: response.data.report.created_at,
+    content: response.data.report.content,
+  };
+}
+
+async function sendDecision(applicationId: string, decisionType: string, note: string, requestedDocuments: string[] = []): Promise<ApplicationRecord> {
+  const response = await apiRequest<unknown>(endpoints.decision(applicationId), {
+    method: "POST",
+    body: {
+      decision_type: decisionType,
+      note,
+      actor: "bank_expert",
+      requested_documents: requestedDocuments,
+    },
+  });
+
+  if (!response.data) {
+    throw new Error(response.error || "Karar backend'e gonderilemedi.");
+  }
+
+  return mapApplicationRecord(response.data);
+}
+
+function filterDemoApplications(scope: ApplicationScope) {
+  if (scope === "auto") {
+    return demoApplications.filter((item) => item.risk_level === "Düşük");
+  }
+  if (scope === "manual" || scope === "pending") {
+    return demoApplications.filter((item) => item.risk_level !== "Düşük");
+  }
+  if (scope === "completed") {
+    return [];
+  }
+  return demoApplications;
+}
