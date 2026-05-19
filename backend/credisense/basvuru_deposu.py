@@ -11,8 +11,10 @@ import json
 import sqlite3
 from pathlib import Path
 
+from .yol_ayarlari import data_path
 
-DEFAULT_APPLICATION_STORE = Path("veri") / "basvuru_kayitlari.db"
+
+DEFAULT_APPLICATION_STORE = data_path("basvuru_kayitlari.db")
 SQLITE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 
 

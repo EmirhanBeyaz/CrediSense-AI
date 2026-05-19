@@ -17,6 +17,7 @@ from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
+import re
 
 from .basvuru_kaydi import build_application_record
 from .katman_00_form_belge_tutarlilik import evaluate_form_document_consistency
@@ -66,6 +67,7 @@ def analyze_documents(
         parsed_documents.bank_statement,
     )
     features = _build_features(parsed_documents, consistency, form)
+    data_precedence_warnings = _data_precedence_warnings(form, parsed_documents, features)
     features["form_document_consistency_score"] = form_document_consistency.score
     risk = score_application(
         features=features,
@@ -95,6 +97,7 @@ def analyze_documents(
         "application_package_quality": package_quality_dict,
         "application_form_quality": form_quality_dict,
         "consent_quality": consent_quality_dict,
+        "data_precedence_warnings": data_precedence_warnings,
         "form_document_consistency": form_document_consistency_dict,
         "application_status": product_outputs["application_status"],
         "user_view": product_outputs["user_view"],
@@ -170,9 +173,11 @@ def _build_features(
     features["anomaly_score"] = consistency.anomaly_score
     features["document_confidence_score"] = _document_confidence(parsed)
     requested_credit_amount = _requested_credit_amount(application_form)
-    total_current_debt = _total_current_debt(application_form)
+    total_current_debt = _effective_current_debt(application_form, parsed.bank_statement)
+    document_estimated_debt = _document_estimated_current_debt(application_form, parsed.bank_statement)
     features["requested_credit_amount"] = requested_credit_amount
     features["current_total_debt"] = total_current_debt
+    features["document_estimated_current_debt"] = document_estimated_debt
     features["debt_to_income_ratio"] = _debt_to_income(
         features,
         debt_amount=requested_credit_amount + total_current_debt,
@@ -348,6 +353,42 @@ def _total_current_debt(application_form: dict) -> float:
     return current_loan_debt + credit_card_debt
 
 
+def _effective_current_debt(application_form: dict, bank: BankStatementInfo | None) -> float:
+    """Form borcu belge hareketleriyle ciddi uyumsuzsa belge tahminini esas alir."""
+
+    form_debt = _total_current_debt(application_form)
+    document_debt = _document_estimated_current_debt(application_form, bank)
+    if document_debt > 0 and (form_debt <= 0 or _relative_difference(form_debt, document_debt) > 0.30):
+        return document_debt
+    return form_debt
+
+
+def _document_estimated_current_debt(application_form: dict, bank: BankStatementInfo | None) -> float:
+    """Banka hareketlerindeki kredi/taksit cikislarindan kaba borc gosterge tutari uretir."""
+
+    if not bank or not bank.transactions:
+        return 0.0
+
+    credit_outflows = [
+        transaction.outflow
+        for transaction in bank.transactions
+        if transaction.outflow > 0 and _looks_like_debt_payment(transaction.description)
+    ]
+    if not credit_outflows:
+        return 0.0
+
+    average_payment = sum(credit_outflows) / len(credit_outflows)
+    remaining_term = _to_float(application_form.get("vade_ay")) or 12.0
+    return round(average_payment * remaining_term, 2)
+
+
+def _looks_like_debt_payment(description: str) -> bool:
+    """Islem aciklamasi kredi/borc/taksit odemesine benziyorsa True dondurur."""
+
+    normalized = _normalize_text(description)
+    return any(keyword in normalized for keyword in ["kredi", "taksit", "borc", "loan"])
+
+
 def _monthly_payment(application_form: dict) -> float:
     """Formdaki aylık ödeme bilgisini okur veya basitçe tahmin eder."""
 
@@ -376,13 +417,66 @@ def _add_optional_form_number(
         target[target_key] = _to_float(application_form.get(source_key))
 
 
+def _data_precedence_warnings(
+    application_form: dict,
+    parsed: ParsedDocuments,
+    features: dict[str, float],
+) -> list[str]:
+    """Beyan ile belge verisi ayrisiyorsa kullaniciya hangi verinin esas alindigini aciklar."""
+
+    warnings: list[str] = []
+    form_income = _to_float(application_form.get("beyan_edilen_aylik_gelir"))
+    document_income = features.get("avg_monthly_income") or features.get("declared_salary") or 0.0
+    if form_income > 0 and document_income > 0 and _relative_difference(form_income, document_income) > 0.20:
+        warnings.append(
+            "Beyan edilen gelir belgelerdeki gelirle uyumlu degil. Risk hesaplamasinda belge ve banka hareketlerinden cikarilan gelir esas alindi."
+        )
+
+    form_debt = _total_current_debt(application_form)
+    document_debt = features.get("document_estimated_current_debt", 0.0)
+    if form_debt > 0 and document_debt > 0 and _relative_difference(form_debt, document_debt) > 0.30:
+        warnings.append(
+            "Beyan edilen borc bilgisi banka hareketlerindeki kredi/taksit odemeleriyle uyumlu gorunmuyor. Borc degerlendirmesinde belge hareketlerinden cikarilan borc gostergeleri esas alindi."
+        )
+
+    return warnings
+
+
+def _relative_difference(first_value: float, second_value: float) -> float:
+    """Iki pozitif sayi arasindaki goreli farki hesaplar."""
+
+    reference = max(abs(first_value), abs(second_value), 1.0)
+    return abs(first_value - second_value) / reference
+
+
+def _normalize_text(value: str) -> str:
+    """Turkce karakter ve bosluk farklarini azaltir."""
+
+    translation_table = str.maketrans("ÇĞİÖŞÜçğıöşü", "CGIOSUcgiosu")
+    normalized = str(value).translate(translation_table).lower()
+    return " ".join(normalized.split())
+
+
 def _to_float(value) -> float:
     """Boş veya hatalı değeri 0.0 kabul ederek sayıya çevirir."""
 
     if value is None or str(value).strip() == "":
         return 0.0
 
+    text = re.sub(r"[^0-9,.\-]", "", str(value).strip())
+    if not text:
+        return 0.0
+
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "." in text:
+        parts = text.split(".")
+        if len(parts) > 1 and all(len(part) == 3 for part in parts[1:]):
+            text = "".join(parts)
+
     try:
-        return float(str(value).replace(",", ".").strip())
+        return float(text)
     except ValueError:
         return 0.0

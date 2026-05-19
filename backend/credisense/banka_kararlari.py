@@ -24,6 +24,13 @@ BANK_DECISION_RULES = {
         "user_message": "Başvurun şu aşamada olumlu değerlendirilemedi.",
         "is_final": True,
     },
+    "revise": {
+        "status_code": "REVISION_REQUESTED",
+        "status_text": "Revizyon istendi",
+        "next_action": "Kullanıcıdan başvuru veya belge revizyonu bekle.",
+        "user_message": "Başvurunda revizyon gereken alanlar var. Banka uzmanının notuna göre bilgileri güncellemen gerekiyor.",
+        "is_final": False,
+    },
     "request_extra_document": {
         "status_code": "EXTRA_DOCUMENT_REQUESTED",
         "status_text": "Ek belge istendi",
@@ -96,10 +103,10 @@ def allowed_bank_decisions(current_status_code: str) -> list[str]:
     if current_status_code in {"DOCUMENT_REVISION_REQUIRED", "FORM_REVISION_REQUIRED"}:
         return ["request_extra_document", "reject"]
 
-    if current_status_code == "EXTRA_DOCUMENT_REQUESTED":
+    if current_status_code in {"EXTRA_DOCUMENT_REQUESTED", "REVISION_REQUESTED"}:
         return ["reject", "send_to_deep_review"]
 
-    return ["approve", "reject", "request_extra_document", "send_to_deep_review"]
+    return ["approve", "reject", "request_extra_document", "revise", "send_to_deep_review"]
 
 
 def _current_status(decision_rule: dict) -> dict:
@@ -139,6 +146,8 @@ def _user_actions_after_decision(decision_type: str) -> list[str]:
 
     if decision_type == "request_extra_document":
         return ["document_upload"]
+    if decision_type == "revise":
+        return ["form_update", "document_upload"]
     if decision_type == "approve":
         return ["loan_terms_view", "payment_plan_view"]
     return ["status_view"]

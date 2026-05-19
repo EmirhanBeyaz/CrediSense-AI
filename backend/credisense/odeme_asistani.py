@@ -18,6 +18,10 @@ SUPPORTED_QUESTIONS = {
     "late_payment",
     "overdue_payments",
     "change_due_date",
+    "monthly_payment",
+    "total_cost",
+    "installment_count",
+    "bank_support",
 }
 
 
@@ -66,6 +70,18 @@ def answer_payment_question(
 
     if question_type == "change_due_date":
         return _change_due_date_answer(payment_plan)
+
+    if question_type == "monthly_payment":
+        return _monthly_payment_answer(payment_plan)
+
+    if question_type == "total_cost":
+        return _total_cost_answer(payment_plan)
+
+    if question_type == "installment_count":
+        return _installment_count_answer(payment_plan)
+
+    if question_type == "bank_support":
+        return _bank_support_answer(payment_plan)
 
     return _unknown_answer(question_type)
 
@@ -263,6 +279,94 @@ def _change_due_date_answer(payment_plan: dict) -> dict:
     }
 
 
+def _monthly_payment_answer(payment_plan: dict) -> dict:
+    """Aylik taksit tutarini ve vadeyi ozetler."""
+
+    monthly_payment = float(payment_plan.get("monthly_payment", 0))
+    term_months = int(float(payment_plan.get("term_months", 0) or 0))
+    return {
+        "intent": "monthly_payment",
+        "message": (
+            f"Bu kredi icin aylik taksit tutari {_format_money(monthly_payment)} olarak gorunuyor. "
+            f"Plan vadesi {term_months} ay."
+        ),
+        "data": {
+            "monthly_payment": monthly_payment,
+            "term_months": term_months,
+        },
+        "requires_bank_support": False,
+        "allowed_actions": ["payment_plan_view"],
+    }
+
+
+def _total_cost_answer(payment_plan: dict) -> dict:
+    """Toplam geri odeme ve faiz bilgisini verir."""
+
+    total_payment = float(payment_plan.get("total_payment", 0))
+    total_interest = float(payment_plan.get("total_interest", 0))
+    principal = float(payment_plan.get("principal", 0))
+    if total_payment <= 0:
+        schedule = payment_plan.get("schedule", [])
+        total_payment = round(sum(float(item.get("payment_amount", 0)) for item in schedule), 2)
+        total_interest = round(max(0, total_payment - principal), 2)
+
+    return {
+        "intent": "total_cost",
+        "message": (
+            f"Plan toplam geri odemeyi {_format_money(total_payment)} olarak gosteriyor. "
+            f"Bunun yaklasik {_format_money(total_interest)} kismi faiz/maliyet kalemi olarak hesaplanmis."
+        ),
+        "data": {
+            "principal": principal,
+            "total_payment": total_payment,
+            "total_interest": total_interest,
+        },
+        "requires_bank_support": False,
+        "allowed_actions": ["payment_plan_view"],
+    }
+
+
+def _installment_count_answer(payment_plan: dict) -> dict:
+    """Kalan, odenen ve gecikmis taksit sayilarini verir."""
+
+    schedule = payment_plan.get("schedule", [])
+    paid_count = len([item for item in schedule if item.get("status") == "paid"])
+    overdue_count = len([item for item in schedule if item.get("status") == "overdue"])
+    remaining_count = len(schedule) - paid_count
+    return {
+        "intent": "installment_count",
+        "message": (
+            f"Toplam {len(schedule)} taksitin {paid_count} tanesi odenmis gorunuyor. "
+            f"Kalan taksit sayisi {remaining_count}. Gecikmis taksit sayisi {overdue_count}."
+        ),
+        "data": {
+            "total_installment_count": len(schedule),
+            "paid_installment_count": paid_count,
+            "remaining_installment_count": remaining_count,
+            "overdue_installment_count": overdue_count,
+        },
+        "requires_bank_support": overdue_count > 0,
+        "allowed_actions": ["payment_plan_view", "payment_history_view"],
+    }
+
+
+def _bank_support_answer(payment_plan: dict) -> dict:
+    """Banka destegi gerektiren konular icin kontrollu yonlendirme yapar."""
+
+    return {
+        "intent": "bank_support",
+        "message": (
+            "Bu konu banka onayi veya musteri temsilcisi islemi gerektirebilir. "
+            "Erken kapama, taksit tarihi degisikligi, yapilandirma ve itiraz gibi talepler icin banka destek kaydi acilmalidir."
+        ),
+        "data": {
+            "loan_id": payment_plan.get("loan_id", ""),
+        },
+        "requires_bank_support": True,
+        "allowed_actions": ["bank_support_request"],
+    }
+
+
 def _unknown_answer(question_type: str) -> dict:
     """Desteklenmeyen soru tipleri için güvenli cevap üretir."""
 
@@ -325,10 +429,16 @@ def _detect_question_type(message: str) -> str:
 
     text = _normalize_text(message)
 
-    if any(word in text for word in ["ozet", "plan", "taksitler", "summary"]):
-        return "summary"
     if any(word in text for word in ["siradaki", "sonraki", "ne zaman", "next", "tarih"]):
         return "next_payment"
+    if any(word in text for word in ["aylik", "taksitim ne kadar", "taksit tutari"]):
+        return "monthly_payment"
+    if any(word in text for word in ["toplam", "maliyet", "faiz", "geri odeme"]):
+        return "total_cost"
+    if any(word in text for word in ["kac taksit", "kac odeme", "kalan taksit", "taksitim kaldi", "taksit sayisi"]):
+        return "installment_count"
+    if any(word in text for word in ["ozet", "plan", "taksitler", "summary"]):
+        return "summary"
     if any(word in text for word in ["durum", "status", "odemelerim"]):
         return "payment_status"
     if any(word in text for word in ["kalan", "borc", "remaining"]):
@@ -339,6 +449,8 @@ def _detect_question_type(message: str) -> str:
         return "overdue_payments"
     if any(word in text for word in ["ertele", "degistir", "gunu", "change"]):
         return "change_due_date"
+    if any(word in text for word in ["destek", "temsilci", "itiraz", "yardim", "banka"]):
+        return "bank_support"
 
     return "unknown"
 
@@ -349,3 +461,14 @@ def _normalize_text(value: str) -> str:
     translation_table = str.maketrans("ÇĞİÖŞÜçğıöşü", "CGIOSUcgiosu")
     normalized = value.translate(translation_table).lower()
     return " ".join(normalized.split())
+
+
+def _format_money(value: float) -> str:
+    """TL tutarini arayuzde okunur sekilde bicimlendirir."""
+
+    rounded_value = round(float(value), 2)
+    if rounded_value.is_integer():
+        formatted = f"{int(rounded_value):,}".replace(",", ".")
+    else:
+        formatted = f"{rounded_value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{formatted} TL"

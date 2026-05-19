@@ -10,8 +10,10 @@ import json
 import sqlite3
 from pathlib import Path
 
+from .yol_ayarlari import data_path
 
-DEFAULT_PAYMENT_STORE = Path("veri") / "odeme_planlari.db"
+
+DEFAULT_PAYMENT_STORE = data_path("odeme_planlari.db")
 
 
 def save_payment_plan(payment_plan: dict, store_path: str | Path = DEFAULT_PAYMENT_STORE) -> dict:

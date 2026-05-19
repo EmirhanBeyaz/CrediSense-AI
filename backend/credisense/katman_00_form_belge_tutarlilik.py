@@ -11,6 +11,7 @@ Bu katman kredi kararı vermez. Sadece "formdaki bilgi belgelerle uyumlu mu?" so
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 
 from .katman_02_belge_anlama import BankStatementInfo, IdentityInfo, PayrollInfo
 
@@ -293,7 +294,20 @@ def _to_float(value) -> float:
     if value is None or str(value).strip() == "":
         return 0.0
 
+    text = re.sub(r"[^0-9,.\-]", "", str(value).strip())
+    if not text:
+        return 0.0
+
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "." in text:
+        parts = text.split(".")
+        if len(parts) > 1 and all(len(part) == 3 for part in parts[1:]):
+            text = "".join(parts)
+
     try:
-        return float(str(value).replace(",", ".").strip())
+        return float(text)
     except ValueError:
         return 0.0

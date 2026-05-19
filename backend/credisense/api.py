@@ -11,40 +11,137 @@ import json
 import re
 import shutil
 import tempfile
-from datetime import date
+import unicodedata
+from contextlib import asynccontextmanager
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .analiz_akisi import analyze_documents
+from .asistan_deposu import DEFAULT_ASSISTANT_STORE, save_assistant_exchange
 from .banka_kararlari import apply_bank_decision
 from .basvuru_deposu import DEFAULT_APPLICATION_STORE, get_application_record, list_application_records, save_application_record
+from .belge_deposu import DEFAULT_DOCUMENT_FOLDER, DEFAULT_DOCUMENT_STORE, list_user_documents, save_uploaded_document
+from .kullanici_deposu import (
+    DEFAULT_USER_STORE,
+    authenticate_user,
+    create_email_verification_token,
+    create_password_reset_token,
+    create_session,
+    delete_user_account,
+    get_user_by_identifier,
+    get_user_by_token,
+    initialize_user_database,
+    public_user_from_record,
+    register_user,
+    reset_password_with_token,
+    update_user_profile,
+    verify_email_token,
+)
+from .mail_servisi import get_mail_settings_status, send_password_reset_email, send_verification_email
 from .odeme_asistani import answer_payment_message, answer_payment_question
-from .odeme_deposu import DEFAULT_PAYMENT_STORE, get_payment_plan, list_payment_plans, save_payment_plan
+from .odeme_deposu import (
+    DEFAULT_PAYMENT_STORE,
+    get_payment_plan,
+    get_payment_plan_by_application,
+    list_payment_plans,
+    save_payment_plan,
+)
 from .odeme_plani import build_payment_plan, update_installment_status
 from .rapor_uret import create_analysis_reports, report_files_to_dict
+from .rapor_deposu import DEFAULT_REPORT_STORE, list_report_records, save_expert_report_record, save_report_record
+from .yol_ayarlari import project_path
 
 
 APP_VERSION = "0.1.0"
-DEFAULT_DATASET_PATH = Path("veri") / "sentetik_kredi_basvuru_veri_seti.csv"
-REPORT_FOLDER = Path("raporlar")
+DEFAULT_DATASET_PATH = project_path("veri", "sentetik_kredi_basvuru_veri_seti.csv")
+REPORT_FOLDER = project_path("raporlar")
 APPLICATION_STORE_PATH = DEFAULT_APPLICATION_STORE
 PAYMENT_STORE_PATH = DEFAULT_PAYMENT_STORE
+USER_STORE_PATH = DEFAULT_USER_STORE
+DOCUMENT_STORE_PATH = DEFAULT_DOCUMENT_STORE
+DOCUMENT_FOLDER_PATH = DEFAULT_DOCUMENT_FOLDER
+ASSISTANT_STORE_PATH = DEFAULT_ASSISTANT_STORE
+REPORT_STORE_PATH = DEFAULT_REPORT_STORE
 MAX_DOCUMENT_COUNT = 10
+
+
+class LoginRequest(BaseModel):
+    """Kullanici giris istegi."""
+
+    identifier: str = Field(description="Kullanici adi veya e-posta")
+    password: str = Field(description="Kullanici sifresi")
+    role: str = Field(description="customer veya expert")
+
+
+class RegisterRequest(BaseModel):
+    """Yeni kullanici kayit istegi."""
+
+    username: str
+    email: str
+    password: str
+    role: str = Field(description="customer veya expert")
+    full_name: str
+    title: str = ""
+    profile: dict = Field(default_factory=dict)
+
+
+class VerifyEmailRequest(BaseModel):
+    """E-posta dogrulama istegi."""
+
+    identifier: str = Field(description="Kullanici adi veya e-posta")
+    token: str = Field(description="E-posta ile gelen dogrulama tokeni")
+
+
+class ResendVerificationRequest(BaseModel):
+    """Yeni e-posta dogrulama tokeni isteme istegi."""
+
+    identifier: str = Field(description="Kullanici adi veya e-posta")
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Sifre sifirlama kodu isteme istegi."""
+
+    email: str = Field(description="Hesaba kayitli e-posta")
+    role: str = Field(description="customer veya expert")
+
+
+class ResetPasswordRequest(BaseModel):
+    """Sifre sifirlama kodu ile yeni sifre belirleme istegi."""
+
+    email: str = Field(description="Hesaba kayitli e-posta")
+    role: str = Field(description="customer veya expert")
+    token: str = Field(description="E-posta ile gelen sifre sifirlama kodu")
+    new_password: str = Field(description="Yeni sifre")
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Kullanici profilindeki urun alanlarini guncelleme istegi."""
+
+    profile: dict = Field(default_factory=dict)
 
 
 class BankDecisionRequest(BaseModel):
     """Banka uzmanı karar isteği."""
 
-    decision_type: str = Field(description="approve, reject, request_extra_document veya send_to_deep_review")
+    decision_type: str = Field(description="approve, reject, request_extra_document, revise veya send_to_deep_review")
     note: str = ""
     actor: str = "bank_user"
     requested_documents: list[str] = Field(default_factory=list)
+
+
+class ExpertReportRequest(BaseModel):
+    """Banka uzmanının yazdığı kanaat raporu isteği."""
+
+    title: str = "Uzman kanaat raporu"
+    content: str
 
 
 class PaymentPlanRequest(BaseModel):
@@ -69,11 +166,67 @@ class PaymentAssistantRequest(BaseModel):
     message: str = ""
     today: str = ""
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """API acilirken SQLite kullanici veritabanini hazirlar."""
+
+    initialize_user_database(store_path=USER_STORE_PATH, seed_demo_users=True)
+    yield
+
+
 app = FastAPI(
     title="CrediSense AI API",
     version=APP_VERSION,
+    lifespan=lifespan,
     description="Kredi ön değerlendirme prototipi için HTTP API.",
 )
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _require_current_user(
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> dict:
+    """Authorization header icindeki bearer token ile kullaniciyi dogrular."""
+
+    token = _extract_bearer_token(authorization or "")
+    user = get_user_by_token(token, store_path=USER_STORE_PATH)
+    if not user:
+        raise HTTPException(status_code=401, detail="Gecerli oturum bulunamadi.")
+    return user
+
+
+def _require_customer(current_user: dict) -> None:
+    """Endpointin musteri kullanicisi gerektirdigini kontrol eder."""
+
+    if current_user.get("role") != "customer":
+        raise HTTPException(status_code=403, detail="Bu islem sadece musteri kullanicisi icindir.")
+
+
+def _require_expert(current_user: dict) -> None:
+    """Endpointin banka uzmani gerektirdigini kontrol eder."""
+
+    if current_user.get("role") != "expert":
+        raise HTTPException(status_code=403, detail="Bu islem sadece banka uzmani icindir.")
+
+
+def _extract_bearer_token(authorization: str) -> str:
+    """Authorization header degerinden token metnini ayiklar."""
+
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        return ""
+    return authorization[len(prefix):].strip()
 
 
 @app.exception_handler(HTTPException)
@@ -105,6 +258,278 @@ def health() -> dict[str, str]:
     }
 
 
+@app.get("/mail/status")
+def mail_status() -> dict:
+    """Gmail SMTP ayarlarinin hazir olup olmadigini gosterir."""
+
+    return get_mail_settings_status()
+
+
+@app.post("/auth/login")
+def login(login_request: LoginRequest) -> dict:
+    """Kullanici adi/e-posta ve sifre ile oturum acar."""
+
+    role = login_request.role.strip()
+    if role not in {"customer", "expert"}:
+        raise HTTPException(status_code=400, detail="Rol customer veya expert olmali.")
+
+    user_record = get_user_by_identifier(login_request.identifier, store_path=USER_STORE_PATH)
+    if user_record and user_record.get("role") == role and not user_record.get("email_verified", False):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Bu hesap e-posta dogrulamasi bekliyor. Dogrula sekmesinden kayit kodunu girin "
+                "veya sifremi unuttum ile yeni kod alip sifrenizi yenileyin."
+            ),
+        )
+
+    user = authenticate_user(
+        identifier=login_request.identifier,
+        password=login_request.password,
+        role=role,
+        store_path=USER_STORE_PATH,
+    )
+    if not user:
+        raise HTTPException(status_code=401, detail="Kullanici adi/e-posta, sifre veya rol hatali.")
+
+    session = create_session(user["id"], store_path=USER_STORE_PATH)
+    return {
+        "user": user,
+        **session,
+    }
+
+
+@app.post("/auth/register")
+def register(register_request: RegisterRequest) -> dict:
+    """Yeni kullaniciyi SQLite veritabanina kaydeder ve dogrulama tokeni gonderir."""
+
+    role = register_request.role.strip()
+    if role not in {"customer", "expert"}:
+        raise HTTPException(status_code=400, detail="Rol customer veya expert olmali.")
+
+    try:
+        user = register_user(
+            username=register_request.username,
+            email=register_request.email,
+            password=register_request.password,
+            role=role,
+            full_name=register_request.full_name,
+            title=register_request.title,
+            profile=register_request.profile,
+            store_path=USER_STORE_PATH,
+        )
+    except ValueError as error:
+        status_code = 409 if "kilitli" in str(error).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(error)) from error
+
+    try:
+        token_info = create_email_verification_token(user["id"], store_path=USER_STORE_PATH)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    mail_result = _send_verification_token(user, token_info["token"])
+
+    return _verification_response(user, token_info, mail_result)
+
+
+@app.post("/auth/verify-email")
+def verify_email(verify_request: VerifyEmailRequest) -> dict:
+    """E-posta tokeni dogruysa kullaniciyi aktif eder ve oturum acar."""
+
+    user = verify_email_token(
+        identifier=verify_request.identifier,
+        token=verify_request.token,
+        store_path=USER_STORE_PATH,
+    )
+    if not user:
+        raise HTTPException(status_code=400, detail="Dogrulama tokeni hatali veya suresi dolmus.")
+
+    session = create_session(user["id"], store_path=USER_STORE_PATH)
+    return {
+        "user": user,
+        **session,
+    }
+
+
+@app.post("/auth/resend-verification")
+def resend_verification(resend_request: ResendVerificationRequest) -> dict:
+    """Kayitli ama dogrulanmamis kullanici icin yeni token gonderir."""
+
+    user_record = get_user_by_identifier(resend_request.identifier, store_path=USER_STORE_PATH)
+    if not user_record:
+        raise HTTPException(status_code=404, detail="Kullanici bulunamadi.")
+    if user_record.get("email_verified", False):
+        raise HTTPException(status_code=400, detail="Bu e-posta zaten dogrulanmis.")
+
+    user = public_user_from_record(user_record)
+    try:
+        token_info = create_email_verification_token(user["id"], store_path=USER_STORE_PATH)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    mail_result = _send_verification_token(user, token_info["token"])
+
+    return _verification_response(user, token_info, mail_result)
+
+
+@app.post("/auth/forgot-password")
+def forgot_password(forgot_request: ForgotPasswordRequest) -> dict:
+    """Hesap e-postasi dogruysa sifre sifirlama kodu gonderir."""
+
+    role = forgot_request.role.strip()
+    if role not in {"customer", "expert"}:
+        raise HTTPException(status_code=400, detail="Rol customer veya expert olmali.")
+
+    try:
+        token_info = create_password_reset_token(
+            email=forgot_request.email,
+            role=role,
+            store_path=USER_STORE_PATH,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+    user = token_info["user"]
+    mail_result = _send_password_reset_token(user, token_info["token"])
+    return _password_reset_response(user, token_info, mail_result)
+
+
+@app.post("/auth/reset-password")
+def reset_password(reset_request: ResetPasswordRequest) -> dict:
+    """E-posta kodunu dogrulayip kullanici sifresini gunceller."""
+
+    role = reset_request.role.strip()
+    if role not in {"customer", "expert"}:
+        raise HTTPException(status_code=400, detail="Rol customer veya expert olmali.")
+
+    try:
+        user = reset_password_with_token(
+            email=reset_request.email,
+            role=role,
+            token=reset_request.token,
+            new_password=reset_request.new_password,
+            store_path=USER_STORE_PATH,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    if not user:
+        raise HTTPException(status_code=400, detail="Sifre sifirlama kodu hatali veya suresi dolmus.")
+
+    return {
+        "user": user,
+        "message": "Sifre guncellendi. Yeni sifreyle giris yapabilirsiniz.",
+    }
+
+
+@app.get("/auth/me")
+def get_me(current_user: Annotated[dict, Depends(_require_current_user)]) -> dict:
+    """Token sahibi kullanicinin genel profil bilgisini dondurur."""
+
+    return {
+        "user": public_user_from_record(current_user),
+    }
+
+
+@app.delete("/auth/me")
+def delete_me(current_user: Annotated[dict, Depends(_require_current_user)]) -> dict:
+    """Token sahibi kullanici hesabini siler."""
+
+    deleted_user = delete_user_account(current_user["user_id"], store_path=USER_STORE_PATH)
+    return {
+        "deleted": True,
+        "user": deleted_user,
+        "message": "Hesap silindi.",
+    }
+
+
+@app.put("/auth/me/profile")
+def update_me_profile(
+    profile_request: ProfileUpdateRequest,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
+    """Token sahibi kullanicinin profil verisini SQLite uzerinde gunceller."""
+
+    try:
+        updated_user = update_user_profile(
+            current_user["user_id"],
+            profile_request.profile,
+            store_path=USER_STORE_PATH,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+    return {
+        "user": updated_user,
+    }
+
+
+@app.get("/me/payment-plan")
+def get_my_payment_plan(current_user: Annotated[dict, Depends(_require_current_user)]) -> dict:
+    """Musterinin aktif odeme planini veritabanindan dondurur."""
+
+    _require_customer(current_user)
+    profile = current_user.get("profile", {})
+    active_loan_id = str(profile.get("active_loan_id", "")).strip()
+    active_application_id = str(profile.get("active_application_id", "")).strip()
+
+    payment_plan = get_payment_plan(active_loan_id, store_path=PAYMENT_STORE_PATH) if active_loan_id else None
+    if not payment_plan and active_application_id:
+        payment_plan = get_payment_plan_by_application(active_application_id, store_path=PAYMENT_STORE_PATH)
+    if not payment_plan:
+        payment_plan = _find_latest_customer_payment_plan(current_user)
+    if not payment_plan:
+        approved_application = _find_latest_approved_customer_application(current_user)
+        if approved_application:
+            payment_plan = _build_payment_plan_for_approval(approved_application)
+            save_payment_plan(payment_plan, store_path=PAYMENT_STORE_PATH)
+            _attach_payment_plan_to_customer_profile(approved_application, payment_plan)
+
+    if not payment_plan:
+        if not active_loan_id and not active_application_id:
+            raise HTTPException(status_code=404, detail="Aktif odeme plani bulunamadi.")
+        payment_plan = _create_profile_payment_plan(current_user)
+        save_payment_plan(payment_plan, store_path=PAYMENT_STORE_PATH)
+
+    return payment_plan
+
+
+@app.post("/documents")
+async def upload_document(
+    document: Annotated[UploadFile, File(description="Kaydedilecek PDF belgesi")],
+    document_type: Annotated[str, Form(description="Belge tipi")] = "other",
+    document_name: Annotated[str, Form(description="Belge adi")] = "Belge",
+    current_user: Annotated[dict, Depends(_require_current_user)] = None,
+) -> dict:
+    """Yuklenen belgeyi kalici dosyaya ve SQLite metadata deposuna kaydeder."""
+
+    _require_customer(current_user)
+    try:
+        record = save_uploaded_document(
+            file_name=document.filename or "document.pdf",
+            file_stream=document.file,
+            owner_user_id=current_user["user_id"],
+            document_type=document_type,
+            document_name=document_name,
+            store_path=DOCUMENT_STORE_PATH,
+            file_folder=DOCUMENT_FOLDER_PATH,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return record
+
+
+@app.get("/documents")
+def list_documents(current_user: Annotated[dict, Depends(_require_current_user)]) -> dict:
+    """Oturumdaki musteriye ait belge metadata kayitlarini listeler."""
+
+    _require_customer(current_user)
+    documents = list_user_documents(current_user["user_id"], store_path=DOCUMENT_STORE_PATH)
+    return {
+        "count": len(documents),
+        "documents": documents,
+    }
+
+
 @app.post("/analyze")
 async def analyze(
     documents: Annotated[list[UploadFile], File(description="Analiz edilecek PDF belgeleri")],
@@ -124,11 +549,14 @@ async def analyze(
         bool,
         Form(description="Başvuru kaydı ürün deposuna yazılsın mı?"),
     ] = True,
+    current_user: Annotated[dict, Depends(_require_current_user)] = None,
 ) -> dict:
     """Yüklenen PDF belgelerini ve başvuru formunu analiz eder."""
 
+    _require_customer(current_user)
     _validate_document_count(documents)
-    form_payload = _parse_application_form(application_form)
+    form_payload = _prepare_application_form(_parse_application_form(application_form), current_user)
+    _ensure_required_consents(form_payload)
     dataset_path = DEFAULT_DATASET_PATH if use_dataset_summary else None
 
     with tempfile.TemporaryDirectory(prefix="credisense_api_") as temp_dir:
@@ -144,6 +572,9 @@ async def analyze(
             dataset_path=dataset_path,
             application_form=form_payload,
         )
+        _ensure_required_document_types(result)
+        _ensure_account_document_owner_matches(current_user, result)
+        _save_analyzed_documents(document_paths, result, current_user)
         analysis_id = result["application_id"]
 
         if create_report:
@@ -152,20 +583,42 @@ async def analyze(
                 output_folder=REPORT_FOLDER,
                 analysis_id=analysis_id,
             )
-            result["report_files"] = report_files_to_dict(report_files)
+            report_files_dict = report_files_to_dict(report_files)
+            result["report_files"] = report_files_dict
+            save_report_record(
+                application_id=analysis_id,
+                owner_user_id=current_user["user_id"],
+                report_files=report_files_dict,
+                store_path=REPORT_STORE_PATH,
+            )
 
         if save_application:
-            save_application_record(result["application_record"], store_path=APPLICATION_STORE_PATH)
+            application_record = result["application_record"]
+            application_record["owner_user_id"] = current_user["user_id"]
+            application_record["owner_role"] = current_user["role"]
+            result["application_record"] = application_record
+            save_application_record(application_record, store_path=APPLICATION_STORE_PATH)
 
         return result
 
 
 @app.get("/applications")
-def list_applications(limit: int = 50) -> dict:
+def list_applications(
+    current_user: Annotated[dict, Depends(_require_current_user)],
+    limit: int = 50,
+    scope: str = "all",
+) -> dict:
     """Kayıt deposundaki son başvuruları listeler."""
 
     safe_limit = max(1, min(limit, 100))
     records = list_application_records(store_path=APPLICATION_STORE_PATH, limit=safe_limit)
+    if current_user["role"] == "customer":
+        records = [
+            record for record in records
+            if record.get("owner_user_id") == current_user["user_id"]
+        ]
+    records = [_add_expert_workflow(record) for record in records]
+    records = _filter_applications_by_scope(records, scope)
     return {
         "count": len(records),
         "applications": records,
@@ -173,19 +626,28 @@ def list_applications(limit: int = 50) -> dict:
 
 
 @app.get("/applications/{application_id}")
-def get_application(application_id: str) -> dict:
+def get_application(
+    application_id: str,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
     """Başvuru ID değerine göre ürün kaydını döndürür."""
 
     record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
     if not record:
         raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
-    return record
+    _ensure_application_access(record, current_user)
+    return _add_expert_workflow(record)
 
 
 @app.post("/applications/{application_id}/decision")
-def decide_application(application_id: str, decision_request: BankDecisionRequest) -> dict:
+def decide_application(
+    application_id: str,
+    decision_request: BankDecisionRequest,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
     """Banka uzmanı kararını mevcut başvuru kaydına işler."""
 
+    _require_expert(current_user)
     record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
     if not record:
         raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
@@ -201,14 +663,68 @@ def decide_application(application_id: str, decision_request: BankDecisionReques
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
+    payment_plan = None
+    if decision_request.decision_type == "approve":
+        try:
+            payment_plan = _build_payment_plan_for_approval(updated_record)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
     save_application_record(updated_record, store_path=APPLICATION_STORE_PATH)
-    return updated_record
+    if payment_plan:
+        save_payment_plan(payment_plan, store_path=PAYMENT_STORE_PATH)
+        _attach_payment_plan_to_customer_profile(updated_record, payment_plan)
+        updated_record["payment_plan"] = payment_plan
+
+    return _add_expert_workflow(updated_record)
+
+
+@app.post("/applications/{application_id}/expert-report")
+def create_expert_report(
+    application_id: str,
+    report_request: ExpertReportRequest,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
+    """Uzman kanaat raporunu başvuruya ve rapor deposuna kaydeder."""
+
+    _require_expert(current_user)
+    content = report_request.content.strip()
+    if len(content) < 20:
+        raise HTTPException(status_code=400, detail="Kanaat raporu en az 20 karakter olmalı.")
+
+    record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
+    if not record:
+        raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
+
+    report = save_expert_report_record(
+        application_id=application_id,
+        owner_user_id=record.get("owner_user_id", ""),
+        title=report_request.title,
+        content=content,
+        author=current_user.get("full_name", ""),
+        store_path=REPORT_STORE_PATH,
+    )
+
+    expert_reports = list(record.get("expert_reports", []))
+    expert_reports.append(report)
+    record["expert_reports"] = expert_reports
+    save_application_record(record, store_path=APPLICATION_STORE_PATH)
+
+    return {
+        "report": report,
+        "application": _add_expert_workflow(record),
+    }
 
 
 @app.post("/applications/{application_id}/payment-plan")
-def create_payment_plan(application_id: str, payment_request: PaymentPlanRequest) -> dict:
+def create_payment_plan(
+    application_id: str,
+    payment_request: PaymentPlanRequest,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
     """Onayli basvuru kaydindan odeme plani olusturur."""
 
+    _require_expert(current_user)
     record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
     if not record:
         raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
@@ -228,11 +744,16 @@ def create_payment_plan(application_id: str, payment_request: PaymentPlanRequest
 
 
 @app.get("/payment-plans")
-def list_payment_plan_records(limit: int = 50) -> dict:
+def list_payment_plan_records(
+    current_user: Annotated[dict, Depends(_require_current_user)],
+    limit: int = 50,
+) -> dict:
     """Kayitli odeme planlarini listeler."""
 
     safe_limit = max(1, min(limit, 100))
     plans = list_payment_plans(store_path=PAYMENT_STORE_PATH, limit=safe_limit)
+    if current_user["role"] == "customer":
+        plans = [plan for plan in plans if _can_access_payment_plan(plan, current_user)]
     return {
         "count": len(plans),
         "payment_plans": plans,
@@ -240,12 +761,16 @@ def list_payment_plan_records(limit: int = 50) -> dict:
 
 
 @app.get("/payment-plans/{loan_id}")
-def get_payment_plan_record(loan_id: str) -> dict:
+def get_payment_plan_record(
+    loan_id: str,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
     """Kredi ID degerine gore odeme planini dondurur."""
 
     payment_plan = get_payment_plan(loan_id, store_path=PAYMENT_STORE_PATH)
     if not payment_plan:
         raise HTTPException(status_code=404, detail="Ödeme planı bulunamadı.")
+    _ensure_payment_plan_access(payment_plan, current_user)
     return payment_plan
 
 
@@ -254,9 +779,11 @@ def update_payment_installment(
     loan_id: str,
     installment_no: int,
     status_request: InstallmentStatusRequest,
+    current_user: Annotated[dict, Depends(_require_current_user)],
 ) -> dict:
     """Odeme planindaki tek taksitin durumunu gunceller."""
 
+    _require_expert(current_user)
     payment_plan = get_payment_plan(loan_id, store_path=PAYMENT_STORE_PATH)
     if not payment_plan:
         raise HTTPException(status_code=404, detail="Ödeme planı bulunamadı.")
@@ -277,24 +804,75 @@ def update_payment_installment(
 
 
 @app.post("/payment-plans/{loan_id}/assistant")
-def ask_payment_assistant(loan_id: str, assistant_request: PaymentAssistantRequest) -> dict:
+def ask_payment_assistant(
+    loan_id: str,
+    assistant_request: PaymentAssistantRequest,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
     """Odeme plani uzerinden kontrollu asistan cevabi uretir."""
 
     payment_plan = get_payment_plan(loan_id, store_path=PAYMENT_STORE_PATH)
     if not payment_plan:
         raise HTTPException(status_code=404, detail="Ödeme planı bulunamadı.")
+    _ensure_payment_plan_access(payment_plan, current_user)
 
     today = _parse_optional_date(assistant_request.today, field_name="today")
     if assistant_request.message.strip():
-        return answer_payment_message(payment_plan, assistant_request.message, today=today)
+        response = answer_payment_message(payment_plan, assistant_request.message, today=today)
+        saved_message = save_assistant_exchange(
+            user_id=current_user["user_id"],
+            loan_id=loan_id,
+            user_message=assistant_request.message,
+            assistant_response=response,
+            store_path=ASSISTANT_STORE_PATH,
+        )
+        response["saved_message_id"] = saved_message["message_id"]
+        return response
 
     question_type = assistant_request.question_type.strip() or "summary"
-    return answer_payment_question(payment_plan, question_type, today=today)
+    response = answer_payment_question(payment_plan, question_type, today=today)
+    saved_message = save_assistant_exchange(
+        user_id=current_user["user_id"],
+        loan_id=loan_id,
+        user_message=question_type,
+        assistant_response=response,
+        store_path=ASSISTANT_STORE_PATH,
+    )
+    response["saved_message_id"] = saved_message["message_id"]
+    return response
+
+
+@app.get("/reports")
+def list_reports(
+    current_user: Annotated[dict, Depends(_require_current_user)],
+    limit: int = 50,
+) -> dict:
+    """SQLite rapor metadata kayitlarini listeler."""
+
+    owner_user_id = "" if current_user["role"] == "expert" else current_user["user_id"]
+    reports = list_report_records(
+        owner_user_id=owner_user_id,
+        store_path=REPORT_STORE_PATH,
+        limit=limit,
+    )
+    return {
+        "count": len(reports),
+        "reports": reports,
+    }
 
 
 @app.get("/reports/{analysis_id}/{report_type}")
-def download_report(analysis_id: str, report_type: str) -> FileResponse:
+def download_report(
+    analysis_id: str,
+    report_type: str,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> FileResponse:
     """Analiz ID'sine göre JSON veya Markdown raporunu indirir."""
+
+    if current_user["role"] == "customer":
+        record = get_application_record(analysis_id, store_path=APPLICATION_STORE_PATH)
+        if record:
+            _ensure_application_access(record, current_user)
 
     if report_type not in {"json", "md"}:
         raise HTTPException(status_code=400, detail="Rapor tipi 'json' veya 'md' olmalı.")
@@ -309,6 +887,318 @@ def download_report(analysis_id: str, report_type: str) -> FileResponse:
         media_type=media_type,
         filename=report_path.name,
     )
+
+
+def _add_expert_workflow(application_record: dict) -> dict:
+    """Başvuru kaydına uzman paneli için rota ve aksiyon özeti ekler."""
+
+    record = dict(application_record)
+    current_status = record.get("current_status", {})
+    status_code = str(current_status.get("status_code", "")).strip()
+    risk_summary = record.get("risk_summary", {})
+    risk_level = str(risk_summary.get("risk_level", record.get("risk_level", ""))).strip()
+    raw_risk_score = risk_summary.get("risk_score", record.get("risk_score"))
+    risk_score = _safe_float(raw_risk_score) if raw_risk_score not in {None, ""} else None
+    risk_score_ratio = (risk_score / 100) if risk_score and risk_score > 1 else risk_score
+
+    if status_code in {"APPROVED", "REJECTED"}:
+        route = "completed"
+        route_text = "Tamamlanan başvuru"
+        system_action = "Karar süreci tamamlandı."
+    elif status_code == "PRE_APPROVED" or risk_level == "Düşük" or (risk_score_ratio is not None and risk_score_ratio <= 0.4):
+        route = "auto_pre_approved"
+        route_text = "Otomatik ön onay"
+        system_action = "Düşük risk nedeniyle sistem otomatik ön onay verdi."
+    elif status_code == "DEEP_REVIEW" or risk_level == "Yüksek" or (risk_score_ratio is not None and risk_score_ratio >= 0.7):
+        route = "deep_review"
+        route_text = "Detaylı manuel inceleme"
+        system_action = "Yüksek risk nedeniyle banka uzmanı kararı gerekiyor."
+    else:
+        route = "manual_review"
+        route_text = "Manuel inceleme"
+        system_action = "Orta risk nedeniyle banka uzmanı değerlendirmesi gerekiyor."
+
+    record["expert_workflow"] = {
+        "route": route,
+        "route_text": route_text,
+        "system_action": system_action,
+        "requires_expert_decision": route in {"manual_review", "deep_review"},
+        "can_write_opinion_report": route in {"manual_review", "deep_review", "auto_pre_approved"},
+    }
+    return record
+
+
+def _filter_applications_by_scope(records: list[dict], scope: str) -> list[dict]:
+    """Uzman ekranındaki farklı listelerin aynı veriyi farklı mantıkla görmesini sağlar."""
+
+    normalized_scope = scope.strip().lower()
+    if normalized_scope in {"all", ""}:
+        return records
+
+    route_aliases = {
+        "auto": {"auto_pre_approved"},
+        "auto_pre_approved": {"auto_pre_approved"},
+        "manual": {"manual_review", "deep_review"},
+        "pending": {"manual_review", "deep_review"},
+        "deep": {"deep_review"},
+        "completed": {"completed"},
+    }
+    accepted_routes = route_aliases.get(normalized_scope)
+    if not accepted_routes:
+        return records
+
+    return [
+        record for record in records
+        if record.get("expert_workflow", {}).get("route") in accepted_routes
+    ]
+
+
+def _ensure_application_access(application_record: dict, current_user: dict) -> None:
+    """Musterinin sadece kendi basvurusuna, uzmanın tum basvurulara erismesini saglar."""
+
+    if current_user["role"] == "expert":
+        return
+
+    owner_user_id = application_record.get("owner_user_id", "")
+    if owner_user_id and owner_user_id == current_user["user_id"]:
+        return
+
+    raise HTTPException(status_code=403, detail="Bu basvuruya erisim yetkiniz yok.")
+
+
+def _send_verification_token(user: dict, token: str) -> dict:
+    """E-posta dogrulama tokenini mail servisine iletir."""
+
+    try:
+        return send_verification_email(
+            email=str(user.get("email", "")),
+            full_name=str(user.get("full_name", "")),
+            token=token,
+        )
+    except Exception as error:
+        return {
+            "sent": False,
+            "provider": "gmail-smtp",
+            "message": f"E-posta gonderilemedi: {error}",
+        }
+
+
+def _send_password_reset_token(user: dict, token: str) -> dict:
+    """Sifre sifirlama tokenini mail servisine iletir."""
+
+    try:
+        return send_password_reset_email(
+            email=str(user.get("email", "")),
+            full_name=str(user.get("full_name", "")),
+            token=token,
+        )
+    except Exception as error:
+        return {
+            "sent": False,
+            "provider": "gmail-smtp",
+            "message": f"E-posta gonderilemedi: {error}",
+        }
+
+
+def _verification_response(user: dict, token_info: dict, mail_result: dict) -> dict:
+    """Kayit/dogrulama tokeni cevabini ortak formatta uretir."""
+
+    response = {
+        "user": user,
+        "verification_required": True,
+        "email_sent": bool(mail_result.get("sent", False)),
+        "email_provider": mail_result.get("provider", ""),
+        "expires_at": token_info.get("expires_at", ""),
+        "message": mail_result.get("message", ""),
+    }
+    if not mail_result.get("sent", False):
+        response["development_token"] = token_info.get("token", "")
+    return response
+
+
+def _password_reset_response(user: dict, token_info: dict, mail_result: dict) -> dict:
+    """Sifre sifirlama tokeni cevabini ortak formatta uretir."""
+
+    response = {
+        "user": user,
+        "email_sent": bool(mail_result.get("sent", False)),
+        "email_provider": mail_result.get("provider", ""),
+        "expires_at": token_info.get("expires_at", ""),
+        "message": mail_result.get("message", ""),
+    }
+    if not mail_result.get("sent", False):
+        response["development_token"] = token_info.get("token", "")
+    return response
+
+
+def _ensure_payment_plan_access(payment_plan: dict, current_user: dict) -> None:
+    """Odeme planinda rol ve sahiplik kontrolu yapar."""
+
+    if _can_access_payment_plan(payment_plan, current_user):
+        return
+    raise HTTPException(status_code=403, detail="Bu odeme planina erisim yetkiniz yok.")
+
+
+def _find_latest_customer_payment_plan(current_user: dict) -> dict | None:
+    """Profilde kredi ID yoksa kullanicinin basvurularindan uretilen son odeme planini bulur."""
+
+    payment_plans = list_payment_plans(store_path=PAYMENT_STORE_PATH, limit=100)
+    for payment_plan in payment_plans:
+        if _can_access_payment_plan(payment_plan, current_user):
+            return payment_plan
+    return None
+
+
+def _find_latest_approved_customer_application(current_user: dict) -> dict | None:
+    """Odeme plani olmayan ama onaylanmis son musteri basvurusunu bulur."""
+
+    records = list_application_records(store_path=APPLICATION_STORE_PATH, limit=100)
+    for record in records:
+        if record.get("owner_user_id") != current_user["user_id"]:
+            continue
+        status_code = record.get("current_status", {}).get("status_code", "")
+        if status_code == "APPROVED":
+            return record
+    return None
+
+
+def _build_payment_plan_for_approval(application_record: dict) -> dict:
+    """Onaylanan basvuru icin odeme planini hazirlar.
+
+    Uzman onayi ile odeme plani ayni urun akisinin parcasi olmalidir. Bu nedenle
+    onay kararinda tutar veya vade hatasi varsa karar kaydedilmeden once hata veririz.
+    """
+
+    application_id = str(application_record.get("application_id", "")).strip()
+    existing_plan = get_payment_plan_by_application(application_id, store_path=PAYMENT_STORE_PATH)
+    if existing_plan:
+        return existing_plan
+
+    payment_plan = build_payment_plan(application_record)
+    owner_user_id = str(application_record.get("owner_user_id", "")).strip()
+    if owner_user_id:
+        payment_plan["customer_user_id"] = owner_user_id
+    return payment_plan
+
+
+def _attach_payment_plan_to_customer_profile(application_record: dict, payment_plan: dict) -> None:
+    """Olusan odeme planini basvuru sahibi profilindeki aktif kredi alanlarina yazar."""
+
+    owner_user_id = str(application_record.get("owner_user_id", "")).strip()
+    if not owner_user_id:
+        return
+
+    profile_updates = {
+        "active_loan_id": payment_plan.get("loan_id", ""),
+        "active_application_id": payment_plan.get("application_id", ""),
+        "requested_credit": payment_plan.get("principal", 0),
+        "current_debt": payment_plan.get("payment_summary", {}).get(
+            "remaining_principal_after_last_payment",
+            payment_plan.get("principal", 0),
+        ),
+        "maturity_months": payment_plan.get("term_months", 0),
+    }
+    try:
+        update_user_profile(owner_user_id, profile_updates, store_path=USER_STORE_PATH)
+    except ValueError:
+        # Basvuru kaydi sahibinin silinmis olmasi odeme plani uretimini bozmasin.
+        return
+
+
+def _can_access_payment_plan(payment_plan: dict, current_user: dict) -> bool:
+    """Odeme plani goruntuleme yetkisini kontrol eder."""
+
+    if current_user["role"] == "expert":
+        return True
+
+    profile = current_user.get("profile", {})
+    if payment_plan.get("loan_id") == profile.get("active_loan_id"):
+        return True
+
+    application_id = payment_plan.get("application_id", "")
+    if not application_id:
+        return False
+
+    application_record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
+    return bool(application_record and application_record.get("owner_user_id") == current_user["user_id"])
+
+
+def _create_profile_payment_plan(current_user: dict) -> dict:
+    """Kullanici profilindeki finansal bilgilerden ilk odeme planini olusturur."""
+
+    profile = current_user.get("profile", {})
+    principal = _safe_float(profile.get("current_debt", 0))
+    requested_amount = _safe_float(profile.get("requested_credit", principal))
+    monthly_payment = 7950.0
+    term_months = int(_safe_float(profile.get("maturity_months", 36)) or 36)
+    first_due_date = date.today().replace(day=15)
+
+    schedule = []
+    remaining_principal = principal
+    for index in range(1, min(term_months, 12) + 1):
+        due_date = first_due_date + timedelta(days=30 * (index - 1))
+        principal_payment = round(min(remaining_principal, monthly_payment * 0.72), 2)
+        remaining_principal = round(max(0.0, remaining_principal - principal_payment), 2)
+        schedule.append(
+            {
+                "installment_no": index,
+                "due_date": due_date.isoformat(),
+                "payment_amount": monthly_payment,
+                "principal_amount": principal_payment,
+                "interest_amount": round(monthly_payment - principal_payment, 2),
+                "remaining_principal": remaining_principal,
+                "status": "pending",
+                "paid_date": "",
+                "note": "",
+            }
+        )
+
+    return {
+        "loan_id": profile.get("active_loan_id") or f"LOAN-{current_user['user_id']}",
+        "application_id": profile.get("active_application_id", ""),
+        "customer_user_id": current_user["user_id"],
+        "principal": requested_amount,
+        "current_debt": principal,
+        "term_months": term_months,
+        "monthly_interest_rate": 0.025,
+        "monthly_payment": monthly_payment,
+        "total_payment": round(monthly_payment * term_months, 2),
+        "total_interest": round((monthly_payment * term_months) - requested_amount, 2),
+        "first_due_date": first_due_date.isoformat(),
+        "schedule": schedule,
+        "payment_summary": {
+            "paid_installment_count": 0,
+            "pending_installment_count": len(schedule),
+            "overdue_installment_count": 0,
+            "payment_progress_ratio": 0.0,
+            "remaining_principal_after_last_payment": principal,
+        },
+    }
+
+
+def _safe_float(value: object) -> float:
+    """Sayisal profil degerini guvenli float degerine cevirir."""
+
+    if value is None or str(value).strip() == "":
+        return 0.0
+
+    text = re.sub(r"[^0-9,.\-]", "", str(value).strip())
+    if not text:
+        return 0.0
+
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "." in text:
+        parts = text.split(".")
+        if len(parts) > 1 and all(len(part) == 3 for part in parts[1:]):
+            text = "".join(parts)
+
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _parse_optional_date(value: str, field_name: str) -> date | None:
@@ -351,6 +1241,197 @@ def _parse_application_form(application_form: str) -> dict:
         raise HTTPException(status_code=400, detail="Başvuru formu JSON nesnesi olmalı.")
 
     return payload
+
+
+def _prepare_application_form(payload: dict, current_user: dict) -> dict:
+    """Frontend alan adlarini analiz katmaninin bekledigi alanlara cevirir."""
+
+    form = dict(payload)
+    alias_map = {
+        "full_name": "ad_soyad",
+        "test_id": "tckn_test_no",
+        "birth_date": "dogum_tarihi",
+        "employer": "isveren_adi",
+        "declared_income": "beyan_edilen_aylik_gelir",
+        "requested_credit": "talep_edilen_kredi_tutari",
+        "maturity_months": "vade_ay",
+        "existing_debt": "mevcut_kredi_borcu",
+    }
+
+    for source_key, target_key in alias_map.items():
+        if target_key not in form and source_key in form:
+            form[target_key] = form[source_key]
+
+    form["hesap_sahibi_ad_soyad"] = current_user.get("full_name", "")
+    form["hesap_sahibi_kullanici_id"] = current_user.get("user_id", "")
+    return form
+
+
+def _ensure_required_consents(form_payload: dict) -> None:
+    """KVKK ve veri isleme onayi yoksa analiz API'sini durdurur."""
+
+    missing_consents = [
+        label
+        for key, label in [
+            ("kvkk_onayi", "KVKK onayi"),
+            ("veri_isleme_onayi", "veri isleme onayi"),
+        ]
+        if not _truthy_form_value(form_payload.get(key))
+    ]
+    if missing_consents:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Analiz baslamadan once {', '.join(missing_consents)} alinmali.",
+        )
+
+
+def _ensure_required_document_types(result: dict) -> None:
+    """Kimlik, gelir ve banka dokumu dogru okunamadiysa analiz kaydini durdurur."""
+
+    quality_items = result.get("document_quality", [])
+    detected_types = [str(item.get("document_type", "")).strip() for item in quality_items]
+    required_types = {
+        "identity": "kimlik belgesi",
+        "payroll": "gelir belgesi/maas bordrosu",
+        "bank_statement": "banka hesap dokumu",
+    }
+    missing_labels = [
+        label
+        for document_type, label in required_types.items()
+        if document_type not in detected_types
+    ]
+    unknown_files = [
+        str(item.get("file_name", "Belge"))
+        for item in quality_items
+        if str(item.get("document_type", "")).strip() in {"unknown", "consent", ""}
+    ]
+
+    if missing_labels or unknown_files:
+        details = []
+        if missing_labels:
+            details.append(f"Eksik veya yanlis belge: {', '.join(missing_labels)}")
+        if unknown_files:
+            details.append(f"Taninamayan dosya: {', '.join(unknown_files)}")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Belge paketi hatali. Kimlik, gelir belgesi ve banka hesap dokumu PDF'lerini "
+                f"dogru alanlara yeniden yukleyin. {' '.join(details)}"
+            ),
+        )
+
+
+def _save_analyzed_documents(document_paths: list[Path], result: dict, current_user: dict) -> None:
+    """Analizden gecen PDF'leri belge deposuna da kaydeder.
+
+    Boylece kullanici analizi direkt baslatsa bile Belgelerim ve ana paneldeki
+    yuklenen belge sayisi backend verisiyle tutarli kalir.
+    """
+
+    document_names = {
+        "identity": ("identity", "Kimlik Belgesi"),
+        "payroll": ("income", "Gelir Belgesi"),
+        "bank_statement": ("bank", "Banka Hesap Dokumu"),
+    }
+    quality_by_name = {
+        str(item.get("file_name", "")): str(item.get("document_type", ""))
+        for item in result.get("document_quality", [])
+    }
+
+    for document_path in document_paths:
+        detected_type = quality_by_name.get(document_path.name, "")
+        mapped = document_names.get(detected_type)
+        if not mapped:
+            continue
+        document_type, document_name = mapped
+        with document_path.open("rb") as file_stream:
+            save_uploaded_document(
+                file_name=document_path.name,
+                file_stream=file_stream,
+                owner_user_id=current_user["user_id"],
+                document_type=document_type,
+                document_name=document_name,
+                store_path=DOCUMENT_STORE_PATH,
+                file_folder=DOCUMENT_FOLDER_PATH,
+            )
+
+
+def _truthy_form_value(value) -> bool:
+    """Formdan gelen farkli dogru degerlerini tek yerde yorumlar."""
+
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "1", "evet", "yes", "onaylandi", "onaylandı"}
+
+
+def _ensure_account_document_owner_matches(current_user: dict, result: dict) -> None:
+    """Belge sahibi ile oturumdaki kullanici farkliysa basvuruyu durdurur."""
+
+    check = _account_document_owner_check(current_user, result)
+    result["account_document_consistency"] = check
+    if isinstance(result.get("application_record"), dict):
+        result["application_record"]["account_document_consistency"] = check
+    if check["mismatched_names"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Yuklenen belgelerdeki kisi adi oturumdaki kullanici ile eslesmiyor. "
+                f"Hesap: {check['account_full_name']}. Belgeler: {', '.join(check['document_full_names'])}."
+            ),
+        )
+
+
+def _account_document_owner_check(current_user: dict, result: dict) -> dict:
+    """Analiz sonucundan belge sahiplerini toplar ve hesap sahibiyle karsilastirir."""
+
+    account_name = str(current_user.get("full_name", "")).strip()
+    document_names = _document_owner_names(result)
+    normalized_account_name = _normalize_person_name(account_name)
+    mismatched_names = []
+    matched_names = []
+
+    for document_name in document_names:
+        normalized_document_name = _normalize_person_name(document_name)
+        if not normalized_document_name or not normalized_account_name:
+            continue
+        if normalized_document_name == normalized_account_name:
+            matched_names.append(document_name)
+        else:
+            mismatched_names.append(document_name)
+
+    compared_count = len(matched_names) + len(mismatched_names)
+    score = round(len(matched_names) / compared_count, 2) if compared_count else 0.0
+    return {
+        "account_full_name": account_name,
+        "document_full_names": document_names,
+        "matched_names": matched_names,
+        "mismatched_names": mismatched_names,
+        "score": score,
+        "is_match": compared_count > 0 and not mismatched_names,
+    }
+
+
+def _document_owner_names(result: dict) -> list[str]:
+    """Kimlik, gelir belgesi ve banka dokumundeki ad-soyad alanlarini toplar."""
+
+    documents = result.get("documents") or {}
+    names: list[str] = []
+    for document_key in ["identity", "payroll", "bank_statement"]:
+        document = documents.get(document_key) or {}
+        name = str(document.get("full_name", "")).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _normalize_person_name(value: str) -> str:
+    """Ad-soyad karsilastirmasinda buyuk/kucuk harf ve Turkce karakter farklarini azaltir."""
+
+    text = str(value).replace("İ", "I").replace("ı", "i")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    text = re.sub(r"[^a-zA-Z0-9 ]+", " ", text).lower()
+    return " ".join(text.split())
 
 
 def _save_upload_file(upload_file: UploadFile, target_folder: Path) -> Path:

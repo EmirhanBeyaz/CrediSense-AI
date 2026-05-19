@@ -8,6 +8,7 @@ sisteminden gelmelidir. Buradaki amaç ürün mimarisi için anlaşılır bir ö
 """
 
 import calendar
+import re
 from datetime import date
 
 
@@ -26,6 +27,7 @@ def build_payment_plan(
 
     credit_request = application_record.get("credit_request", {})
     principal = _to_float(credit_request.get("requested_amount"))
+    principal = _repair_small_requested_amount(principal, credit_request)
     term_months = int(_to_float(credit_request.get("term_months")))
 
     if principal <= 0:
@@ -57,6 +59,7 @@ def build_payment_plan(
     return {
         "loan_id": _loan_id(application_record.get("application_id", "")),
         "application_id": application_record.get("application_id", ""),
+        "customer_user_id": application_record.get("owner_user_id", ""),
         "principal": round(principal, 2),
         "term_months": term_months,
         "monthly_interest_rate": round(monthly_interest_rate, 4),
@@ -207,6 +210,16 @@ def _payment_summary(schedule: list[dict], principal: float = 0.0) -> dict:
     }
 
 
+def _repair_small_requested_amount(amount: float, credit_request: dict) -> float:
+    """Eski kayitlarda 300.000 TL -> 300 gibi okunmus tutari duzeltir."""
+
+    current_debt = _to_float(credit_request.get("current_total_debt"))
+    declared_income = _to_float(credit_request.get("declared_monthly_income"))
+    if 0 < amount < 1000 and (current_debt >= 10000 or declared_income >= 10000):
+        return amount * 1000
+    return amount
+
+
 def _loan_id(application_id: str) -> str:
     """Başvuru ID'sinden kredi ID'si üretir."""
 
@@ -226,12 +239,25 @@ def _add_months(start_date: date, month_count: int) -> date:
 
 
 def _to_float(value) -> float:
-    """Boş veya hatalı değeri 0.0 kabul ederek sayıya çevirir."""
+    """Bos veya hatali degeri 0.0 kabul ederek sayiya cevirir."""
 
     if value is None or str(value).strip() == "":
         return 0.0
 
+    text = re.sub(r"[^0-9,.\-]", "", str(value).strip())
+    if not text:
+        return 0.0
+
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "." in text:
+        parts = text.split(".")
+        if len(parts) > 1 and all(len(part) == 3 for part in parts[1:]):
+            text = "".join(parts)
+
     try:
-        return float(str(value).replace(",", ".").strip())
+        return float(text)
     except ValueError:
         return 0.0

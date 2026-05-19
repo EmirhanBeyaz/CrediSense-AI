@@ -74,6 +74,28 @@ def test_payment_assistant_classifies_free_text_message() -> None:
     assert answer["original_message"] == "Kalan borcum ne kadar?"
 
 
+def test_payment_assistant_returns_total_cost() -> None:
+    answer = answer_payment_message(_payment_plan(), "Toplam geri odeme tutarim ne kadar?")
+
+    assert answer["intent"] == "total_cost"
+    assert answer["data"]["total_payment"] == 353179.8
+    assert answer["requires_bank_support"] is False
+
+
+def test_payment_assistant_returns_installment_count() -> None:
+    answer = answer_payment_message(_payment_plan(), "Kac taksitim kaldi?")
+
+    assert answer["intent"] == "installment_count"
+    assert answer["data"]["remaining_installment_count"] == 1
+
+
+def test_payment_assistant_returns_monthly_payment() -> None:
+    answer = answer_payment_message(_payment_plan(), "Aylik taksitim ne kadar?")
+
+    assert answer["intent"] == "monthly_payment"
+    assert answer["data"]["monthly_payment"] == 9810.55
+
+
 def _payment_plan() -> dict:
     return {
         "loan_id": "LOAN-20260512-TEST0001",
