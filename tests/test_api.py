@@ -457,6 +457,7 @@ def test_analyze_endpoint_rejects_documents_for_different_account(tmp_path, monk
     monkeypatch.setattr("backend.credisense.api.USER_STORE_PATH", tmp_path / "users.db")
     initialize_user_database(store_path=api_module.USER_STORE_PATH, seed_demo_users=True)
     client = TestClient(app)
+    headers = _login_headers(client, role="customer")
 
     register_response = client.post(
         "/auth/register",
