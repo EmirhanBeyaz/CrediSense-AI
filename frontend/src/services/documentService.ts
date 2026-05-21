@@ -23,12 +23,7 @@ export async function uploadDocument(document: UploadedDocument, file: File): Pr
   });
 
   if (!response.data) {
-    return {
-      ...document,
-      file,
-      status: "yuklendi",
-      progress: 100,
-    };
+    throw new Error(response.error || "Belge yuklenemedi.");
   }
 
   return {

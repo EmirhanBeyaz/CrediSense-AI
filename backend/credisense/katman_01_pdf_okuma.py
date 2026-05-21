@@ -129,7 +129,6 @@ def _extract_with_pymupdf(path: Path, warnings: list[str]) -> tuple[str, int] | 
     try:
         import fitz
     except ImportError:
-        warnings.append("PyMuPDF kurulu değil; yerel PDF okuyucu kullanıldı.")
         return None
 
     try:

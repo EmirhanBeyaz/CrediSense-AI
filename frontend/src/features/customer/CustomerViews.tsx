@@ -150,15 +150,25 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
       ),
     );
 
-    const uploaded = await uploadDocument(target, file);
-    setApplicationDocuments((items) => items.map((document) => (document.id === documentId ? uploaded : document)));
-    setSavedDocuments((items) => replaceDocumentInPackage(items, uploaded));
-    const extractedFormFields = uploaded.extractedFields || {};
-    if (Object.keys(extractedFormFields).length) {
-      setForm((currentForm) => mergeExtractedFormFields(currentForm, extractedFormFields));
-      showToast(`${target.name} yüklendi, form bilgileri belgeden güncellendi.`);
-    } else {
-      showToast(`${target.name} yüklendi.`);
+    try {
+      const uploaded = await uploadDocument(target, file);
+      setApplicationDocuments((items) => items.map((document) => (document.id === documentId ? uploaded : document)));
+      setSavedDocuments((items) => replaceDocumentInPackage(items, uploaded));
+      const extractedFormFields = uploaded.extractedFields || {};
+      if (Object.keys(extractedFormFields).length) {
+        setForm((currentForm) => mergeExtractedFormFields(currentForm, extractedFormFields));
+        showToast(`${target.name} yüklendi, form bilgileri belgeden güncellendi.`);
+      } else {
+        showToast(`${target.name} yüklendi.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Belge yuklenemedi.";
+      setApplicationDocuments((items) =>
+        items.map((document) =>
+          document.id === documentId ? { ...document, file: undefined, status: "eksik", progress: 0 } : document,
+        ),
+      );
+      showToast(message);
     }
   }
 
@@ -172,9 +182,19 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
       ),
     );
 
-    const uploaded = await uploadDocument(target, file);
-    setSavedDocuments((items) => replaceDocumentInPackage(items, uploaded));
-    showToast(`${target.name} yüklendi.`);
+    try {
+      const uploaded = await uploadDocument(target, file);
+      setSavedDocuments((items) => replaceDocumentInPackage(items, uploaded));
+      showToast(`${target.name} yüklendi.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Belge yuklenemedi.";
+      setSavedDocuments((items) =>
+        items.map((document) =>
+          document.id === documentId ? { ...document, file: undefined, status: "eksik", progress: 0 } : document,
+        ),
+      );
+      showToast(message);
+    }
   }
 
   async function handleStartAnalysis() {

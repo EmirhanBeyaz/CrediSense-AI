@@ -35,6 +35,7 @@ from .belge_deposu import (
     list_user_documents,
     save_uploaded_document,
 )
+from .ek_belge_dogrulama import validate_requested_document_upload
 from .kullanici_deposu import (
     DEFAULT_USER_STORE,
     authenticate_user,
@@ -508,24 +509,38 @@ async def upload_document(
     """Yuklenen belgeyi kalici dosyaya ve SQLite metadata deposuna kaydeder."""
 
     _require_customer(current_user)
-    try:
-        record = save_uploaded_document(
-            file_name=document.filename or "document.pdf",
-            file_stream=document.file,
-            owner_user_id=current_user["user_id"],
-            document_type=document_type,
-            document_name=document_name,
-            store_path=DOCUMENT_STORE_PATH,
-            file_folder=DOCUMENT_FOLDER_PATH,
+    with tempfile.TemporaryDirectory(prefix="credisense_document_") as temp_dir:
+        document_path = _save_upload_file(document, Path(temp_dir))
+        validation = validate_requested_document_upload(
+            document_path,
+            requested_document_name=document_name,
+            document_type_hint=document_type,
+            source_file_name=document.filename or document_path.name,
         )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        if not validation.is_valid:
+            raise HTTPException(status_code=400, detail=validation.message)
 
-    record["extracted_form_fields"] = extract_form_fields_from_document(
-        record["stored_path"],
-        document_type_hint=document_type,
-        source_file_name=record["original_file_name"],
-    )
+        extra_metadata = {"document_validation": validation.to_dict()} if validation.checked else None
+        try:
+            with document_path.open("rb") as file_stream:
+                record = save_uploaded_document(
+                    file_name=document.filename or "document.pdf",
+                    file_stream=file_stream,
+                    owner_user_id=current_user["user_id"],
+                    document_type=document_type,
+                    document_name=document_name,
+                    store_path=DOCUMENT_STORE_PATH,
+                    file_folder=DOCUMENT_FOLDER_PATH,
+                    extra_metadata=extra_metadata,
+                )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        record["extracted_form_fields"] = extract_form_fields_from_document(
+            record["stored_path"],
+            document_type_hint=document_type,
+            source_file_name=record["original_file_name"],
+        )
     return record
 
 
