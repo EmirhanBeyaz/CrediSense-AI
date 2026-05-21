@@ -642,6 +642,132 @@ def test_payment_plan_endpoints_for_approved_application(tmp_path, monkeypatch) 
     assert customer_plan_response.json()["application_id"] == "APP-20260512-TEST0001"
     assert customer_plan_response.json()["principal"] == payment_plan["principal"]
 
+    wallet_response = client.get("/me/wallet", headers=customer_headers)
+    assert wallet_response.status_code == 200
+    assert wallet_response.json()["balance"] == 0
+
+    top_up_response = client.post(
+        "/me/wallet/top-up",
+        headers=customer_headers,
+        json={
+            "amount": 20000,
+            "card_number": "4111 1111 1111 1111",
+            "expiry_date": "12/30",
+            "cvv": "123",
+            "cardholder_name": "Deniz Kaya",
+        },
+    )
+    assert top_up_response.status_code == 200
+    assert top_up_response.json()["balance"] == 20000
+
+    pay_response = client.post(
+        f"/payment-plans/{loan_id}/installments/2/pay",
+        headers=customer_headers,
+        json={},
+    )
+    assert pay_response.status_code == 200
+    assert pay_response.json()["payment_plan"]["schedule"][1]["status"] == "paid"
+    assert pay_response.json()["wallet"]["balance"] < 20000
+
+    wallet_assistant_response = client.post(
+        f"/payment-plans/{loan_id}/assistant",
+        headers=customer_headers,
+        json={"message": "Cüzdan bakiyem sıradaki taksite yeterli mi?", "today": "2026-06-20"},
+    )
+    assert wallet_assistant_response.status_code == 200
+    assert wallet_assistant_response.json()["intent"] == "wallet_balance"
+
+
+def test_wallet_top_up_rejects_unrealistic_cardholder_name(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("backend.credisense.api.USER_STORE_PATH", tmp_path / "users.db")
+    client = TestClient(app)
+    customer_headers = _login_headers(client, role="customer")
+
+    response = client.post(
+        "/me/wallet/top-up",
+        headers=customer_headers,
+        json={
+            "amount": 10000,
+            "card_number": "4111 1111 1111 1111",
+            "expiry_date": "12/30",
+            "cvv": "123",
+            "cardholder_name": "dfjghjfdhjkg",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "ad ve soyad" in response.json()["error"]["message"]
+
+
+def test_wallet_top_up_rejects_expired_card(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("backend.credisense.api.USER_STORE_PATH", tmp_path / "users.db")
+    client = TestClient(app)
+    customer_headers = _login_headers(client, role="customer")
+
+    response = client.post(
+        "/me/wallet/top-up",
+        headers=customer_headers,
+        json={
+            "amount": 10000,
+            "card_number": "4111 1111 1111 1111",
+            "expiry_date": "01/24",
+            "cvv": "123",
+            "cardholder_name": "Deniz Kaya",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "geçmiş" in response.json()["error"]["message"]
+
+
+def test_customer_can_close_remaining_principal_from_wallet(tmp_path, monkeypatch) -> None:
+    application_store = tmp_path / "applications.db"
+    payment_store = tmp_path / "payment_plans.db"
+    monkeypatch.setattr("backend.credisense.api.APPLICATION_STORE_PATH", application_store)
+    monkeypatch.setattr("backend.credisense.api.PAYMENT_STORE_PATH", payment_store)
+    monkeypatch.setattr("backend.credisense.api.USER_STORE_PATH", tmp_path / "users.db")
+    save_application_record(_approved_application_record(), store_path=application_store)
+    client = TestClient(app)
+    expert_headers = _login_headers(client, role="expert")
+
+    create_response = client.post(
+        "/applications/APP-20260512-TEST0001/payment-plan",
+        headers=expert_headers,
+        json={
+            "monthly_interest_rate": 0.02,
+            "first_due_date": "2026-06-15",
+        },
+    )
+    assert create_response.status_code == 200
+    loan_id = create_response.json()["loan_id"]
+
+    customer_headers = _login_headers(client, role="customer")
+    top_up_response = client.post(
+        "/me/wallet/top-up",
+        headers=customer_headers,
+        json={
+            "amount": 300000,
+            "card_number": "4111 1111 1111 1111",
+            "expiry_date": "12/30",
+            "cvv": "123",
+            "cardholder_name": "Deniz Kaya",
+        },
+    )
+    assert top_up_response.status_code == 200
+
+    payoff_response = client.post(
+        f"/payment-plans/{loan_id}/principal-payoff",
+        headers=customer_headers,
+        json={},
+    )
+
+    assert payoff_response.status_code == 200
+    payload = payoff_response.json()
+    assert payload["payment_plan"]["payment_summary"]["remaining_principal_after_last_payment"] == 0
+    assert payload["payment_plan"]["payment_summary"]["pending_installment_count"] == 0
+    assert payload["payoff"]["principal_amount"] == 250000
+    assert payload["wallet"]["balance"] == 50000
+
 
 class _open_sample_files:
     def __enter__(self):

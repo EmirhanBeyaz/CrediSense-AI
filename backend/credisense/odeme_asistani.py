@@ -12,6 +12,7 @@ from datetime import date
 SUPPORTED_QUESTIONS = {
     "summary",
     "next_payment",
+    "pending_installments",
     "payment_status",
     "remaining_debt",
     "early_payment",
@@ -21,6 +22,7 @@ SUPPORTED_QUESTIONS = {
     "monthly_payment",
     "total_cost",
     "installment_count",
+    "wallet_balance",
     "bank_support",
 }
 
@@ -29,11 +31,12 @@ def answer_payment_message(
     payment_plan: dict,
     message: str,
     today: date | None = None,
+    wallet: dict | None = None,
 ) -> dict:
     """Serbest metin kullanıcı sorusunu basit kurallarla desteklenen soru tipine çevirir."""
 
     question_type = _detect_question_type(message)
-    answer = answer_payment_question(payment_plan, question_type, today=today)
+    answer = answer_payment_question(payment_plan, question_type, today=today, wallet=wallet)
     answer["original_message"] = message
     return answer
 
@@ -42,16 +45,20 @@ def answer_payment_question(
     payment_plan: dict,
     question_type: str,
     today: date | None = None,
+    wallet: dict | None = None,
 ) -> dict:
     """Ödeme planına göre kullanıcı sorusuna kontrollü cevap üretir."""
 
     current_date = today or date.today()
 
     if question_type == "summary":
-        return _summary_answer(payment_plan)
+        return _summary_answer(payment_plan, wallet=wallet)
 
     if question_type == "next_payment":
-        return _next_payment_answer(payment_plan, current_date)
+        return _next_payment_answer(payment_plan, current_date, wallet=wallet)
+
+    if question_type == "pending_installments":
+        return _pending_installments_answer(payment_plan)
 
     if question_type == "payment_status":
         return _payment_status_answer(payment_plan, current_date)
@@ -60,7 +67,7 @@ def answer_payment_question(
         return _remaining_debt_answer(payment_plan)
 
     if question_type == "early_payment":
-        return _early_payment_answer(payment_plan)
+        return _early_payment_answer(payment_plan, wallet=wallet)
 
     if question_type == "late_payment":
         return _late_payment_answer(payment_plan)
@@ -80,21 +87,26 @@ def answer_payment_question(
     if question_type == "installment_count":
         return _installment_count_answer(payment_plan)
 
+    if question_type == "wallet_balance":
+        return _wallet_balance_answer(payment_plan, wallet=wallet)
+
     if question_type == "bank_support":
         return _bank_support_answer(payment_plan)
 
     return _unknown_answer(question_type)
 
 
-def _summary_answer(payment_plan: dict) -> dict:
+def _summary_answer(payment_plan: dict, wallet: dict | None = None) -> dict:
     """Kredi ödeme planının kısa özetini verir."""
 
+    wallet_balance = _wallet_balance(wallet)
+    wallet_text = f" Cüzdan bakiyen {_format_money(wallet_balance)}." if wallet is not None else ""
     return {
         "intent": "summary",
         "message": (
             f"Kredi tutarın {payment_plan.get('principal', 0):.2f} TL, "
             f"vaden {payment_plan.get('term_months', 0)} ay ve tahmini aylık taksitin "
-            f"{payment_plan.get('monthly_payment', 0):.2f} TL."
+            f"{payment_plan.get('monthly_payment', 0):.2f} TL.{wallet_text}"
         ),
         "data": {
             "principal": payment_plan.get("principal", 0),
@@ -102,13 +114,14 @@ def _summary_answer(payment_plan: dict) -> dict:
             "monthly_payment": payment_plan.get("monthly_payment", 0),
             "total_payment": payment_plan.get("total_payment", 0),
             "total_interest": payment_plan.get("total_interest", 0),
+            "wallet_balance": wallet_balance if wallet is not None else None,
         },
         "requires_bank_support": False,
-        "allowed_actions": ["payment_plan_view"],
+        "allowed_actions": ["payment_plan_view", "wallet_view"],
     }
 
 
-def _next_payment_answer(payment_plan: dict, today: date) -> dict:
+def _next_payment_answer(payment_plan: dict, today: date, wallet: dict | None = None) -> dict:
     """Ödenmemiş ilk taksiti bulur ve kullanıcıya söyler."""
 
     next_installment = _next_pending_installment(payment_plan)
@@ -122,28 +135,79 @@ def _next_payment_answer(payment_plan: dict, today: date) -> dict:
         }
 
     due_date = date.fromisoformat(next_installment["due_date"])
+    wallet_balance = _wallet_balance(wallet)
+    can_pay_from_wallet = wallet is not None and wallet_balance >= float(next_installment.get("payment_amount", 0))
+    wallet_text = ""
+    if wallet is not None:
+        wallet_text = (
+            f" Cüzdan bakiyen {_format_money(wallet_balance)} ve bu taksiti ödemeye yeterli."
+            if can_pay_from_wallet
+            else f" Cüzdan bakiyen {_format_money(wallet_balance)}; bu taksit için bakiye yüklemen gerekiyor."
+        )
+
     if due_date < today:
         day_count = (today - due_date).days
         message = (
             f"{next_installment['installment_no']}. taksitin {next_installment['due_date']} tarihinde "
-            f"{next_installment['payment_amount']:.2f} TL idi ve {day_count} gün gecikmiş görünüyor."
+            f"{next_installment['payment_amount']:.2f} TL idi ve {day_count} gün gecikmiş görünüyor.{wallet_text}"
         )
         allowed_actions = ["payment_screen_open", "bank_support_request"]
         requires_bank_support = True
     else:
         message = (
             f"Sıradaki taksitin {next_installment['due_date']} tarihinde "
-            f"{next_installment['payment_amount']:.2f} TL olarak görünüyor."
+            f"{next_installment['payment_amount']:.2f} TL olarak görünüyor.{wallet_text}"
         )
-        allowed_actions = ["payment_screen_open", "payment_plan_view"]
+        allowed_actions = ["payment_screen_open", "payment_plan_view", "wallet_view"]
         requires_bank_support = False
 
     return {
         "intent": "next_payment",
         "message": message,
-        "data": next_installment,
+        "data": {
+            **next_installment,
+            "wallet_balance": wallet_balance if wallet is not None else None,
+            "can_pay_from_wallet": can_pay_from_wallet,
+        },
         "requires_bank_support": requires_bank_support,
         "allowed_actions": allowed_actions,
+    }
+
+
+def _pending_installments_answer(payment_plan: dict) -> dict:
+    """Bekleyen taksit olup olmadigini net sekilde soyler."""
+
+    pending_installments = [
+        installment
+        for installment in payment_plan.get("schedule", [])
+        if installment.get("status") != "paid"
+    ]
+    if not pending_installments:
+        return {
+            "intent": "pending_installments",
+            "message": "Ödeme planında bekleyen taksit görünmüyor. Tüm taksitler ödenmiş veya plan kapanmış görünüyor.",
+            "data": {
+                "pending_installment_count": 0,
+                "next_installment": None,
+            },
+            "requires_bank_support": False,
+            "allowed_actions": ["payment_history_view", "payment_plan_view"],
+        }
+
+    next_installment = pending_installments[0]
+    return {
+        "intent": "pending_installments",
+        "message": (
+            f"{len(pending_installments)} bekleyen taksit görünüyor. "
+            f"Sıradaki taksit {next_installment['due_date']} tarihinde "
+            f"{next_installment['payment_amount']:.2f} TL."
+        ),
+        "data": {
+            "pending_installment_count": len(pending_installments),
+            "next_installment": next_installment,
+        },
+        "requires_bank_support": False,
+        "allowed_actions": ["payment_screen_open", "payment_plan_view"],
     }
 
 
@@ -198,21 +262,57 @@ def _remaining_debt_answer(payment_plan: dict) -> dict:
     }
 
 
-def _early_payment_answer(payment_plan: dict) -> dict:
-    """Erken kapama hakkında güvenli bilgilendirme yapar."""
+def _early_payment_answer(payment_plan: dict, wallet: dict | None = None) -> dict:
+    """Kalan ana parayi tek seferde kapatma bilgisini verir."""
 
     remaining_debt = _remaining_principal(payment_plan)
+    wallet_balance = _wallet_balance(wallet)
+    if remaining_debt <= 0:
+        return {
+            "intent": "early_payment",
+            "message": "Kapatılacak kalan ana para görünmüyor. Ödeme planı kapanmış durumda.",
+            "data": {
+                "estimated_remaining_principal": 0,
+                "wallet_balance": wallet_balance if wallet is not None else None,
+                "can_pay_from_wallet": False,
+            },
+            "requires_bank_support": False,
+            "allowed_actions": ["payment_history_view"],
+        }
+
+    if wallet is not None:
+        can_pay = wallet_balance >= remaining_debt
+        missing_amount = round(max(0, remaining_debt - wallet_balance), 2)
+        message = (
+            f"Kalan ana para {_format_money(remaining_debt)}. "
+            f"Cüzdan bakiyen {_format_money(wallet_balance)}. "
+            f"{'Bu tutarı faiz eklenmeden tek seferde kapatabilirsin.' if can_pay else f'Kapatmak için {_format_money(missing_amount)} daha yüklemen gerekiyor.'}"
+        )
+        return {
+            "intent": "early_payment",
+            "message": message,
+            "data": {
+                "estimated_remaining_principal": remaining_debt,
+                "wallet_balance": wallet_balance,
+                "missing_amount": missing_amount,
+                "can_pay_from_wallet": can_pay,
+                "interest_policy": "future_interest_waived",
+            },
+            "requires_bank_support": False,
+            "allowed_actions": ["wallet_view", "payment_screen_open"],
+        }
+
     return {
         "intent": "early_payment",
         "message": (
             f"Erken ödeme için plan üzerindeki tahmini kalan ana para {remaining_debt:.2f} TL. "
-            "Net erken kapama tutarı günlük faiz, masraf ve banka politikasına göre değişebilir."
+            "Müşteri cüzdanı bağlıysa kalan ana para faiz eklenmeden tek seferde kapatılabilir."
         ),
         "data": {
             "estimated_remaining_principal": remaining_debt,
         },
-        "requires_bank_support": True,
-        "allowed_actions": ["bank_support_request", "early_payment_request"],
+        "requires_bank_support": False,
+        "allowed_actions": ["payment_screen_open"],
     }
 
 
@@ -350,6 +450,50 @@ def _installment_count_answer(payment_plan: dict) -> dict:
     }
 
 
+def _wallet_balance_answer(payment_plan: dict, wallet: dict | None = None) -> dict:
+    """Cuzdan bakiyesi ve siradaki taksiti odeme yeterliligini soyler."""
+
+    balance = _wallet_balance(wallet)
+    next_installment = _next_pending_installment(payment_plan)
+    if not next_installment:
+        return {
+            "intent": "wallet_balance",
+            "message": f"Cüzdan bakiyen {_format_money(balance)}. Bekleyen taksit görünmüyor.",
+            "data": {
+                "wallet_balance": balance,
+                "can_pay_next_installment": False,
+            },
+            "requires_bank_support": False,
+            "allowed_actions": ["wallet_view", "payment_history_view"],
+        }
+
+    next_amount = float(next_installment.get("payment_amount", 0))
+    can_pay = balance >= next_amount
+    if can_pay:
+        message = (
+            f"Cüzdan bakiyen {_format_money(balance)}. "
+            f"Sıradaki {next_installment['installment_no']}. taksit {_format_money(next_amount)} ve bakiyen yeterli."
+        )
+    else:
+        missing_amount = round(next_amount - balance, 2)
+        message = (
+            f"Cüzdan bakiyen {_format_money(balance)}. "
+            f"Sıradaki taksit {_format_money(next_amount)}; ödeme için {_format_money(missing_amount)} daha yüklemen gerekiyor."
+        )
+
+    return {
+        "intent": "wallet_balance",
+        "message": message,
+        "data": {
+            "wallet_balance": balance,
+            "next_installment_amount": next_amount,
+            "can_pay_next_installment": can_pay,
+        },
+        "requires_bank_support": False,
+        "allowed_actions": ["wallet_view", "payment_screen_open"],
+    }
+
+
 def _bank_support_answer(payment_plan: dict) -> dict:
     """Banka destegi gerektiren konular icin kontrollu yonlendirme yapar."""
 
@@ -429,6 +573,10 @@ def _detect_question_type(message: str) -> str:
 
     text = _normalize_text(message)
 
+    if any(phrase in text for phrase in ["bekleyen taksit", "bekleyen odeme", "taksitim var mi", "odeme var mi", "bekleyen borc"]):
+        return "pending_installments"
+    if any(word in text for word in ["cuzdan", "bakiye", "para yukle", "bakiyem", "kartla ode", "odeyebilir miyim", "yeterli mi"]):
+        return "wallet_balance"
     if any(word in text for word in ["siradaki", "sonraki", "ne zaman", "next", "tarih"]):
         return "next_payment"
     if any(word in text for word in ["aylik", "taksitim ne kadar", "taksit tutari"]):
@@ -443,7 +591,7 @@ def _detect_question_type(message: str) -> str:
         return "payment_status"
     if any(word in text for word in ["kalan", "borc", "remaining"]):
         return "remaining_debt"
-    if any(word in text for word in ["erken", "kapama", "early"]):
+    if any(word in text for word in ["erken", "kapama", "kapatma", "kapatabilir", "tek sefer", "tek odeme", "early"]):
         return "early_payment"
     if any(word in text for word in ["gecik", "odenmedi", "late", "overdue"]):
         return "overdue_payments"
@@ -472,3 +620,12 @@ def _format_money(value: float) -> str:
     else:
         formatted = f"{rounded_value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return f"{formatted} TL"
+
+
+def _wallet_balance(wallet: dict | None) -> float:
+    if not wallet:
+        return 0.0
+    try:
+        return round(float(wallet.get("balance", 0) or 0), 2)
+    except (TypeError, ValueError):
+        return 0.0

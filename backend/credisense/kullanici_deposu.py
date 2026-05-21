@@ -47,9 +47,6 @@ def initialize_user_database(
 def create_default_users(store_path: str | Path = DEFAULT_USER_STORE) -> None:
     """Demo urun akisinda kullanilacak varsayilan kullanicilari olusturur."""
 
-    if _user_count(store_path) > 0:
-        return
-
     default_users = [
         {
             "user_id": "USR-CUSTOMER-DENIZ",
@@ -88,6 +85,8 @@ def create_default_users(store_path: str | Path = DEFAULT_USER_STORE) -> None:
     ]
 
     for user in default_users:
+        if get_user_by_identifier(user["username"], store_path=store_path) or get_user_by_identifier(user["email"], store_path=store_path):
+            continue
         create_user(
             user_id=user["user_id"],
             username=user["username"],

@@ -6,6 +6,12 @@ import { mapApplicationRecord } from "./mappers";
 
 type ApplicationScope = "all" | "auto" | "manual" | "pending" | "completed";
 
+export type CreditOfferInput = {
+  approved_amount?: number;
+  term_months?: number;
+  monthly_interest_rate?: number;
+};
+
 export async function getExpertApplications(scope: ApplicationScope = "all"): Promise<ApplicationRecord[]> {
   const path = scope === "all" ? endpoints.applications : `${endpoints.applications}?scope=${scope}`;
   const response = await apiRequest<{ applications: unknown[] }>(path);
@@ -44,8 +50,8 @@ export async function getApplicationDocumentBlobUrl(documentId: string): Promise
   return URL.createObjectURL(blob);
 }
 
-export async function approveApplication(applicationId: string, note = ""): Promise<ApplicationRecord> {
-  return sendDecision(applicationId, "approve", note);
+export async function approveApplication(applicationId: string, note = "", creditOffer?: CreditOfferInput): Promise<ApplicationRecord> {
+  return sendDecision(applicationId, "approve", note, [], creditOffer);
 }
 
 export async function reviseApplication(applicationId: string, note = ""): Promise<ApplicationRecord> {
@@ -87,7 +93,13 @@ export async function createExpertReport(applicationId: string, title: string, c
   };
 }
 
-async function sendDecision(applicationId: string, decisionType: string, note: string, requestedDocuments: string[] = []): Promise<ApplicationRecord> {
+async function sendDecision(
+  applicationId: string,
+  decisionType: string,
+  note: string,
+  requestedDocuments: string[] = [],
+  creditOffer?: CreditOfferInput,
+): Promise<ApplicationRecord> {
   const response = await apiRequest<unknown>(endpoints.decision(applicationId), {
     method: "POST",
     body: {
@@ -95,6 +107,7 @@ async function sendDecision(applicationId: string, decisionType: string, note: s
       note,
       actor: "bank_expert",
       requested_documents: requestedDocuments,
+      credit_offer: creditOffer,
     },
   });
 

@@ -35,6 +35,24 @@ def test_bank_decision_requests_extra_document() -> None:
     assert updated_record["user_notification"]["allowed_actions"] == ["document_upload"]
 
 
+def test_bank_decision_stores_expert_credit_offer_on_approval() -> None:
+    updated_record = apply_bank_decision(
+        _application_record(),
+        decision_type="approve",
+        credit_offer={
+            "approved_amount": 210000,
+            "term_months": 24,
+            "monthly_interest_rate": 0.031,
+        },
+    )
+
+    assert updated_record["bank_decision"]["credit_offer"] == {
+        "approved_amount": 210000,
+        "term_months": 24,
+        "monthly_interest_rate": 0.031,
+    }
+
+
 def test_bank_decision_rejects_invalid_decision_type() -> None:
     with pytest.raises(ValueError):
         apply_bank_decision(_application_record(), decision_type="unknown")

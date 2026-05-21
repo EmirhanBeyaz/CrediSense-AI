@@ -1,4 +1,4 @@
-import type { AnalysisResult, ApplicationRecord, PaymentPlan } from "@/types";
+import type { AnalysisResult, ApplicationRecord, PaymentPlan, Wallet } from "@/types";
 
 export function mapApplicationRecord(raw: any): ApplicationRecord {
   const analysis = raw?.analysis_result || raw?.risk || raw?.result || raw?.risk_summary || {};
@@ -39,7 +39,15 @@ export function mapApplicationRecord(raw: any): ApplicationRecord {
     decision_note: decision?.note,
     report_count: Array.isArray(raw?.expert_reports) ? raw.expert_reports.length : 0,
     credit_request: creditRequest,
-    reasons: bankView?.main_reasons || analysis?.reasons || [],
+    reasons: uniqueStrings([
+      ...(bankView?.main_reasons || []),
+      ...(analysis?.reasons || []),
+      ...(analysis?.main_reasons || []),
+      ...(analysis?.consistency_flags || []),
+      ...(analysis?.form_document_flags || []),
+      ...(analysis?.data_precedence_warnings || []),
+      ...(analysis?.blockers || []),
+    ]),
     raw,
   };
 }
@@ -88,6 +96,11 @@ export function mapPaymentPlan(raw: any): PaymentPlan {
     approved_amount: Number(raw?.principal ?? raw?.approved_amount ?? 0),
     monthly_payment: Number(raw?.monthly_payment ?? 0),
     maturity_months: Number(raw?.term_months ?? raw?.maturity_months ?? 0),
+    monthly_interest_rate: Number(raw?.monthly_interest_rate ?? raw?.interest_policy?.effective_monthly_interest_rate ?? 0),
+    annual_interest_rate: Number(raw?.annual_interest_rate ?? raw?.interest_policy?.effective_annual_interest_rate ?? 0),
+    total_payment: Number(raw?.total_payment ?? 0),
+    total_interest: Number(raw?.total_interest ?? 0),
+    interest_policy: raw?.interest_policy || undefined,
     remaining_principal: Number(
       raw?.current_debt
       ?? raw?.payment_summary?.remaining_principal_after_last_payment
@@ -99,6 +112,26 @@ export function mapPaymentPlan(raw: any): PaymentPlan {
       due_date: String(item.due_date ?? ""),
       amount: Number(item.payment_amount ?? item.amount ?? 0),
       status: mapPaymentStatus(String(item.status ?? "pending")),
+      paid_date: item.paid_date ? String(item.paid_date) : undefined,
+    })),
+  };
+}
+
+export function mapWallet(raw: any): Wallet {
+  const transactions = Array.isArray(raw?.transactions) ? raw.transactions : [];
+  return {
+    balance: Number(raw?.balance ?? 0),
+    currency: String(raw?.currency || "TRY"),
+    transactions: transactions.map((item: any) => ({
+      transaction_id: String(item.transaction_id || item.id || ""),
+      type: String(item.type || ""),
+      amount: Number(item.amount ?? 0),
+      currency: String(item.currency || "TRY"),
+      description: item.description ? String(item.description) : undefined,
+      created_at: item.created_at ? String(item.created_at) : undefined,
+      loan_id: item.loan_id ? String(item.loan_id) : undefined,
+      installment_no: item.installment_no ? Number(item.installment_no) : undefined,
+      card_last4: item.card_last4 ? String(item.card_last4) : undefined,
     })),
   };
 }

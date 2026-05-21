@@ -49,7 +49,7 @@ export function LoginScreen({
         <div className="grid gap-5 lg:grid-cols-2">
           <AuthCard
             buttonLabel="Musteri olarak giris yap"
-            defaultIdentifier="musteri@gmail.com"
+            defaultIdentifier="kullanıcı@gmail.com"
             icon="person"
             loading={loading}
             onLogin={(identifier, password) => onLogin("customer", identifier, password)}

@@ -327,12 +327,13 @@ export default function Home() {
         user={user}
       >
         {role === "expert" ? (
-          <ExpertViews activeView={activeView as ExpertView} showToast={showToast} user={user} />
+          <ExpertViews activeView={activeView as ExpertView} onUserUpdate={setUser} showToast={showToast} user={user} />
         ) : (
           <CustomerViews
             activeView={activeView as CustomerView}
             onAccountDeleted={handleDeleteAccount}
             onNavigate={(view) => setView(view)}
+            onUserUpdate={setUser}
             showToast={showToast}
             user={user}
           />

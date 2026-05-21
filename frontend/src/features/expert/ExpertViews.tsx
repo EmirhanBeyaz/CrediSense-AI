@@ -5,12 +5,16 @@ import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { MetricCard } from "@/components/ui/MetricCard";
+import { ProfileAvatar } from "@/components/ui/ProfileAvatar";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { demoApplications } from "@/lib/demoData";
 import { formatCurrency, scorePercent } from "@/lib/format";
+import { fileToProfileImage } from "@/lib/profileImage";
+import { updateCurrentProfile } from "@/services/authService";
 import {
   approveApplication,
   createExpertReport,
+  type CreditOfferInput,
   getApplicationDocumentBlobUrl,
   getApplicationDocuments,
   getExpertApplications,
@@ -23,18 +27,24 @@ import type { ApplicationDocument, ApplicationRecord, ExpertView, ReportSummary,
 
 type ExpertViewsProps = {
   activeView: ExpertView;
+  onUserUpdate: (user: User) => void;
   showToast: (message: string) => void;
   user: User;
 };
 
 type ExpertDecision = "approve" | "revise" | "extra" | "reject";
+type CreditOfferForm = {
+  approvedAmount: string;
+  termMonths: string;
+  monthlyInterestRate: string;
+};
 
 const extraDocumentOptions = [
   "Güncel gelir belgesi",
   "Son 6 aylık hesap dökümü",
 ];
 
-export function ExpertViews({ activeView, showToast, user }: ExpertViewsProps) {
+export function ExpertViews({ activeView, onUserUpdate, showToast, user }: ExpertViewsProps) {
   const [applications, setApplications] = useState<ApplicationRecord[]>(demoApplications);
   const [selectedId, setSelectedId] = useState(demoApplications[0].application_id);
   const [loading, setLoading] = useState(false);
@@ -44,6 +54,8 @@ export function ExpertViews({ activeView, showToast, user }: ExpertViewsProps) {
   const [decisionNote, setDecisionNote] = useState("");
   const [extraDocumentText, setExtraDocumentText] = useState("Güncel gelir belgesi");
   const [reportText, setReportText] = useState("");
+  const [profileImageLoading, setProfileImageLoading] = useState(false);
+  const [creditOffer, setCreditOffer] = useState<CreditOfferForm>(() => defaultCreditOfferForm(demoApplications[0]));
 
   useEffect(() => {
     refreshExpertData();
@@ -54,6 +66,10 @@ export function ExpertViews({ activeView, showToast, user }: ExpertViewsProps) {
     [applications, selectedId],
   );
   const manualApplications = useMemo(() => applications.filter(isManualReview), [applications]);
+
+  useEffect(() => {
+    setCreditOffer(defaultCreditOfferForm(selected));
+  }, [selected?.application_id]);
 
   useEffect(() => {
     if (!selected?.application_id) {
@@ -107,7 +123,13 @@ export function ExpertViews({ activeView, showToast, user }: ExpertViewsProps) {
       const requestedDocuments = parseRequestedDocuments(extraDocumentText);
       let updated: ApplicationRecord;
 
-      if (action === "approve") updated = await approveApplication(selected.application_id, note);
+      if (action === "approve") {
+        updated = await approveApplication(
+          selected.application_id,
+          note,
+          shouldAllowCreditOffer(selected) ? creditOfferPayload(creditOffer) : undefined,
+        );
+      }
       else if (action === "revise") updated = await reviseApplication(selected.application_id, note);
       else if (action === "extra") updated = await requestExtraDocument(selected.application_id, requestedDocuments, note);
       else updated = await rejectApplication(selected.application_id, note);
@@ -154,6 +176,20 @@ export function ExpertViews({ activeView, showToast, user }: ExpertViewsProps) {
     }
   }
 
+  async function handleProfileImageUpload(file: File) {
+    setProfileImageLoading(true);
+    try {
+      const profileImage = await fileToProfileImage(file);
+      const updatedUser = await updateCurrentProfile({ profile_image: profileImage });
+      onUserUpdate(updatedUser);
+      showToast("Profil fotoğrafı güncellendi.");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Profil fotoğrafı güncellenemedi.");
+    } finally {
+      setProfileImageLoading(false);
+    }
+  }
+
   if (loading && applications.length === 0) {
     return <LoadingState label="Başvurular yükleniyor" />;
   }
@@ -181,7 +217,9 @@ export function ExpertViews({ activeView, showToast, user }: ExpertViewsProps) {
         applications={manualApplications}
         decisionNote={decisionNote}
         extraDocumentText={extraDocumentText}
+        creditOffer={creditOffer}
         onDecision={handleDecision}
+        onCreditOfferChange={setCreditOffer}
         onDecisionNoteChange={setDecisionNote}
         onExtraDocumentTextChange={setExtraDocumentText}
         onReportTextChange={setReportText}
@@ -204,8 +242,10 @@ export function ExpertViews({ activeView, showToast, user }: ExpertViewsProps) {
       <DecisionProcess
         decisionNote={decisionNote}
         extraDocumentText={extraDocumentText}
+        creditOffer={creditOffer}
         loading={actionLoading}
         onDecision={handleDecision}
+        onCreditOfferChange={setCreditOffer}
         onDecisionNoteChange={setDecisionNote}
         onExtraDocumentTextChange={setExtraDocumentText}
         selected={selected}
@@ -215,7 +255,15 @@ export function ExpertViews({ activeView, showToast, user }: ExpertViewsProps) {
   if (activeView === "reports") {
     return <ReportsView applications={applications} reports={reports} />;
   }
-  return <ProfileView applications={applications} reports={reports} user={user} />;
+  return (
+    <ProfileView
+      applications={applications}
+      onProfileImageUpload={handleProfileImageUpload}
+      profileImageLoading={profileImageLoading}
+      reports={reports}
+      user={user}
+    />
+  );
 }
 
 function ExpertHome({ applications }: { applications: ApplicationRecord[] }) {
@@ -320,9 +368,11 @@ function PendingReviewView({
   actionLoading,
   decisionNote,
   extraDocumentText,
+  creditOffer,
   reportText,
   onSelect,
   onDecision,
+  onCreditOfferChange,
   onDecisionNoteChange,
   onExtraDocumentTextChange,
   onReportTextChange,
@@ -334,9 +384,11 @@ function PendingReviewView({
   actionLoading: boolean;
   decisionNote: string;
   extraDocumentText: string;
+  creditOffer: CreditOfferForm;
   reportText: string;
   onSelect: (id: string) => void;
   onDecision: (decision: ExpertDecision) => void;
+  onCreditOfferChange: (value: CreditOfferForm) => void;
   onDecisionNoteChange: (value: string) => void;
   onExtraDocumentTextChange: (value: string) => void;
   onReportTextChange: (value: string) => void;
@@ -368,8 +420,10 @@ function PendingReviewView({
         <DecisionControls
           decisionNote={decisionNote}
           extraDocumentText={extraDocumentText}
+          creditOffer={creditOffer}
           loading={actionLoading}
           onDecision={onDecision}
+          onCreditOfferChange={onCreditOfferChange}
           onDecisionNoteChange={onDecisionNoteChange}
           onExtraDocumentTextChange={onExtraDocumentTextChange}
           selected={selected}
@@ -573,6 +627,7 @@ function DocumentControl({
       <Card>
         <MetricCard label="Anomali Skoru" value={scorePercent(selected.anomaly_score || 0.25)} tone="red" />
       </Card>
+      <RiskReviewPanel selected={selected} />
       <Card className="xl:col-span-3">
         <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Belge Kontrolü</p>
         <h2 className="mt-2 font-display text-3xl font-bold">{selected.customer_name}</h2>
@@ -620,6 +675,45 @@ function DocumentControl({
   );
 }
 
+function RiskReviewPanel({ selected }: { selected: ApplicationRecord }) {
+  const review = buildRiskReviewDetails(selected);
+  if (!review.shouldShow) {
+    return null;
+  }
+
+  return (
+    <Card className="xl:col-span-3">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Risk Gerekçeleri</p>
+          <h2 className="mt-2 font-display text-2xl font-bold">Uzman karar odağı</h2>
+          <p className="mt-2 max-w-3xl text-sm text-muted">{review.summary}</p>
+        </div>
+        <StatusBadge tone={review.tone}>{review.badge}</StatusBadge>
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-3">
+        <RiskDetailColumn title="Ana risk sinyalleri" items={review.riskSignals} />
+        <RiskDetailColumn title="Belge ve veri uyarıları" items={review.documentFindings} />
+        <RiskDetailColumn title="Karar verirken kontrol et" items={review.reviewFocus} />
+      </div>
+    </Card>
+  );
+}
+
+function RiskDetailColumn({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+      <strong className="block text-sm">{title}</strong>
+      <ul className="mt-3 grid gap-2 text-sm text-muted">
+        {items.map((item) => (
+          <li className="rounded-lg border border-white/10 bg-white/[0.03] p-3" key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function RiskAnalysis({ selected }: { selected: ApplicationRecord }) {
   return (
     <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
@@ -654,7 +748,9 @@ function DecisionProcess({
   loading,
   decisionNote,
   extraDocumentText,
+  creditOffer,
   onDecision,
+  onCreditOfferChange,
   onDecisionNoteChange,
   onExtraDocumentTextChange,
 }: {
@@ -662,7 +758,9 @@ function DecisionProcess({
   loading: boolean;
   decisionNote: string;
   extraDocumentText: string;
+  creditOffer: CreditOfferForm;
   onDecision: (decision: ExpertDecision) => void;
+  onCreditOfferChange: (value: CreditOfferForm) => void;
   onDecisionNoteChange: (value: string) => void;
   onExtraDocumentTextChange: (value: string) => void;
 }) {
@@ -673,8 +771,10 @@ function DecisionProcess({
       <DecisionControls
         decisionNote={decisionNote}
         extraDocumentText={extraDocumentText}
+        creditOffer={creditOffer}
         loading={loading}
         onDecision={onDecision}
+        onCreditOfferChange={onCreditOfferChange}
         onDecisionNoteChange={onDecisionNoteChange}
         onExtraDocumentTextChange={onExtraDocumentTextChange}
         selected={selected}
@@ -688,7 +788,9 @@ function DecisionControls({
   loading,
   decisionNote,
   extraDocumentText,
+  creditOffer,
   onDecision,
+  onCreditOfferChange,
   onDecisionNoteChange,
   onExtraDocumentTextChange,
 }: {
@@ -696,12 +798,16 @@ function DecisionControls({
   loading: boolean;
   decisionNote: string;
   extraDocumentText: string;
+  creditOffer: CreditOfferForm;
   onDecision: (decision: ExpertDecision) => void;
+  onCreditOfferChange: (value: CreditOfferForm) => void;
   onDecisionNoteChange: (value: string) => void;
   onExtraDocumentTextChange: (value: string) => void;
 }) {
   const finalStatus = isDecisionFinal(selected);
   const requestedDocuments = parseRequestedDocuments(extraDocumentText);
+  const offerEditable = shouldAllowCreditOffer(selected);
+  const suggestedMonthlyRate = suggestedMonthlyInterestRate(selected);
 
   function handleRequestedDocumentToggle(documentName: string) {
     const nextDocuments = requestedDocuments.includes(documentName)
@@ -713,6 +819,10 @@ function DecisionControls({
     }
 
     onExtraDocumentTextChange(nextDocuments.join(", "));
+  }
+
+  function updateCreditOffer(field: keyof CreditOfferForm, value: string) {
+    onCreditOfferChange({ ...creditOffer, [field]: value });
   }
 
   return (
@@ -752,6 +862,49 @@ function DecisionControls({
           })}
         </div>
       </fieldset>
+      {offerEditable ? (
+        <section className="grid gap-4 rounded-xl border border-primary/20 bg-primary/10 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.14em] text-primary">Kredi koşul teklifi</p>
+              <h3 className="mt-1 font-display text-xl font-bold">Orta/yüksek risk için uzman limiti</h3>
+            </div>
+            <StatusBadge tone={selected.risk_level === "Yüksek" ? "red" : "gold"}>
+              {`Sistem önerisi %${(suggestedMonthlyRate * 100).toFixed(2)}`}
+            </StatusBadge>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="grid gap-2 text-sm text-muted">
+              Verilebilecek en yüksek kredi
+              <input
+                className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-white outline-none focus:border-primary/60"
+                inputMode="decimal"
+                onChange={(event) => updateCreditOffer("approvedAmount", event.target.value)}
+                value={creditOffer.approvedAmount}
+              />
+            </label>
+            <label className="grid gap-2 text-sm text-muted">
+              Vade
+              <input
+                className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-white outline-none focus:border-primary/60"
+                inputMode="numeric"
+                onChange={(event) => updateCreditOffer("termMonths", event.target.value)}
+                value={creditOffer.termMonths}
+              />
+            </label>
+            <label className="grid gap-2 text-sm text-muted">
+              Aylık faiz %
+              <input
+                className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-white outline-none focus:border-primary/60"
+                inputMode="decimal"
+                onChange={(event) => updateCreditOffer("monthlyInterestRate", event.target.value)}
+                value={creditOffer.monthlyInterestRate}
+              />
+            </label>
+          </div>
+          <p className="text-xs text-muted">Ürün bandı aylık %1,85 - %4,25. Onaylandığında ödeme planı bu koşullarla oluşur.</p>
+        </section>
+      ) : null}
       <div className="grid gap-4 md:grid-cols-4">
         <button className="gold-gradient rounded-lg px-5 py-4 font-bold text-black disabled:opacity-60" disabled={loading || finalStatus} onClick={() => onDecision("approve")} type="button">
           Onayla
@@ -922,10 +1075,14 @@ function ApplicationStatusPanel({
 
 function ProfileView({
   applications,
+  onProfileImageUpload,
+  profileImageLoading,
   reports,
   user,
 }: {
   applications: ApplicationRecord[];
+  onProfileImageUpload: (file: File) => void;
+  profileImageLoading: boolean;
   reports: ReportSummary[];
   user: User;
 }) {
@@ -938,10 +1095,19 @@ function ProfileView({
     <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-5">
-          <div>
-            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Uzman Profili</p>
-            <h2 className="mt-2 font-display text-3xl font-bold">{user.fullName}</h2>
-            <p className="mt-2 text-muted">{user.title || "Banka uzmanı"}</p>
+          <div className="flex flex-wrap items-center gap-5">
+            <ProfileAvatar
+              editable
+              loading={profileImageLoading}
+              onImageSelected={onProfileImageUpload}
+              size="lg"
+              user={user}
+            />
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Uzman Profili</p>
+              <h2 className="mt-2 font-display text-3xl font-bold">{user.fullName}</h2>
+              <p className="mt-2 text-muted">{user.title || "Banka uzmanı"}</p>
+            </div>
           </div>
           <StatusBadge tone={user.emailVerified ? "green" : "gold"}>
             {user.emailVerified ? "Kurumsal hesap doğrulandı" : "Doğrulama bekliyor"}
@@ -993,6 +1159,138 @@ function documentLabel(documentType: string) {
     bank_statement: "Banka Hesap Dökümü",
   };
   return labels[documentType] || "Başvuru Belgesi";
+}
+
+function defaultCreditOfferForm(application: ApplicationRecord): CreditOfferForm {
+  const amount = parseMoneyValue(application.credit_request?.requested_amount);
+  const term = parseMoneyValue(application.credit_request?.term_months);
+  return {
+    approvedAmount: Number.isFinite(amount) && amount > 0 ? String(Math.round(amount)) : "",
+    termMonths: Number.isFinite(term) && term > 0 ? String(Math.round(term)) : "36",
+    monthlyInterestRate: (suggestedMonthlyInterestRate(application) * 100).toFixed(2),
+  };
+}
+
+function creditOfferPayload(creditOffer: CreditOfferForm): CreditOfferInput {
+  const approvedAmount = parseMoneyValue(creditOffer.approvedAmount);
+  const termMonths = parseMoneyValue(creditOffer.termMonths);
+  const monthlyInterestPercent = parseMoneyValue(creditOffer.monthlyInterestRate);
+
+  return {
+    approved_amount: Number.isFinite(approvedAmount) && approvedAmount > 0 ? approvedAmount : undefined,
+    term_months: Number.isFinite(termMonths) && termMonths > 0 ? Math.round(termMonths) : undefined,
+    monthly_interest_rate: Number.isFinite(monthlyInterestPercent) && monthlyInterestPercent > 0
+      ? Number((monthlyInterestPercent / 100).toFixed(4))
+      : undefined,
+  };
+}
+
+function shouldAllowCreditOffer(application: ApplicationRecord) {
+  const riskScore = Number(application.risk_score || 0);
+  return application.risk_level === "Orta" || application.risk_level === "Yüksek" || riskScore >= 34;
+}
+
+function suggestedMonthlyInterestRate(application: ApplicationRecord) {
+  const raw = application.raw && typeof application.raw === "object" ? application.raw as any : {};
+  const policyRate = raw?.payment_plan?.interest_policy?.assigned_monthly_interest_rate;
+  if (Number.isFinite(Number(policyRate)) && Number(policyRate) > 0) {
+    return Number(policyRate);
+  }
+
+  const requestedAmount = parseMoneyValue(application.credit_request?.requested_amount);
+  const termMonths = parseMoneyValue(application.credit_request?.term_months);
+  const riskScore = Number(application.risk_score || 0);
+  const normalizedScore = riskScore > 1 ? riskScore / 100 : riskScore;
+  const riskAdjustment = application.risk_level === "Yüksek" || normalizedScore >= 0.67
+    ? 0.011
+    : application.risk_level === "Orta" || normalizedScore >= 0.34
+      ? 0.0055
+      : 0;
+  const amountAdjustment = requestedAmount >= 500000 ? 0.003 : requestedAmount >= 250000 ? 0.0015 : 0;
+  const termAdjustment = termMonths >= 48 ? 0.004 : termMonths >= 36 ? 0.002 : 0;
+  return Math.min(0.0425, Math.max(0.0185, 0.025 + riskAdjustment + amountAdjustment + termAdjustment));
+}
+
+function buildRiskReviewDetails(selected: ApplicationRecord) {
+  const riskScore = Number(selected.risk_score || 0);
+  const riskLevel = String(selected.risk_level || "").trim();
+  const mediumOrHighRisk = riskLevel === "Orta" || riskLevel === "Yüksek" || riskScore >= 34;
+  const highRisk = riskLevel === "Yüksek" || riskScore >= 67;
+  const tone: "gold" | "red" = highRisk ? "red" : "gold";
+  const raw = selected.raw && typeof selected.raw === "object" ? selected.raw as any : {};
+  const riskSummary = raw?.risk_summary || {};
+  const bankView = raw?.bank_view || {};
+  const risk = raw?.risk || {};
+  const consistency = raw?.consistency || {};
+  const formDocumentConsistency = raw?.form_document_consistency || {};
+  const monthlyIncome = parseMoneyValue(selected.credit_request?.declared_monthly_income);
+  const requestedAmount = parseMoneyValue(selected.credit_request?.requested_amount);
+  const currentDebt = parseMoneyValue(selected.credit_request?.current_total_debt);
+  const totalDebtPressure = requestedAmount + currentDebt;
+  const debtIncomeRatio = monthlyIncome > 0 && totalDebtPressure > 0 ? totalDebtPressure / monthlyIncome : Number.NaN;
+
+  const riskSignals = uniqueStrings([
+    ...(selected.reasons || []),
+    ...(riskSummary.main_reasons || []),
+    ...(risk.reasons || []),
+    ...(risk.decision_summary?.main_reasons || []),
+    ...(bankView.main_reasons || []),
+    selected.ai_recommendation || "",
+    selected.system_action || "",
+    riskScore ? `Risk skoru %${riskScore}; başvuru ${highRisk ? "yüksek" : "orta"} risk bandında.` : "",
+    Number.isFinite(debtIncomeRatio) && debtIncomeRatio >= 6
+      ? `Talep edilen kredi ve mevcut borç toplamı aylık gelirin yaklaşık ${debtIncomeRatio.toFixed(1)} katı.`
+      : "",
+  ]);
+
+  const documentFindings = uniqueStrings([
+    ...(riskSummary.consistency_flags || []),
+    ...(riskSummary.form_document_flags || []),
+    ...(riskSummary.data_precedence_warnings || []),
+    ...(riskSummary.blockers || []),
+    ...(bankView.form_document_flags || []),
+    ...(bankView.blockers || []),
+    ...(formDocumentConsistency.flags || []),
+    ...(consistency.flags || []),
+    ...(raw?.data_precedence_warnings || []),
+    selected.consistency_score !== undefined && selected.consistency_score < 0.85
+      ? `Tutarlılık skoru ${scorePercent(selected.consistency_score)}; kimlik, gelir ve banka bilgileri birlikte kontrol edilmeli.`
+      : "",
+    selected.anomaly_score !== undefined && selected.anomaly_score > 0
+      ? `Anomali skoru ${scorePercent(selected.anomaly_score)}; banka hareketlerinde olağandışı çıkış veya borç hareketi aranmalı.`
+      : "",
+    selected.document_confidence_score !== undefined && selected.document_confidence_score < 0.9
+      ? `Belge güven skoru ${scorePercent(selected.document_confidence_score)}; okunamayan veya eksik alanlar tekrar incelenmeli.`
+      : "",
+  ]);
+
+  const reviewFocus = highRisk
+    ? [
+        "Son 6 aylık banka dökümünde düzenli maaş girişi, kredi/kart borcu ve olağandışı nakit çıkışlarını kontrol et.",
+        "Güncel gelir belgesi ile banka maaş girişlerini tutar ve işveren bazında karşılaştır.",
+        "Ek belge isteme, detaylı inceleme veya ret kararını kanaat raporunda açık gerekçeyle yaz.",
+      ]
+    : [
+        "Gelir düzenliliğini, harcama/gelir dengesini ve mevcut borç yükünü birlikte değerlendir.",
+        "Belge sinyalleri net değilse güncel gelir belgesi veya son 6 aylık hesap dökümü iste.",
+        "Onay veya ek belge kararını verirken bu gerekçeleri uzman kanaat raporuna geçir.",
+      ];
+
+  return {
+    shouldShow: mediumOrHighRisk,
+    tone,
+    badge: highRisk ? "Yüksek risk" : "Orta risk",
+    summary: highRisk
+      ? "Bu başvuru detaylı manuel inceleme gerektiriyor. Karardan önce belge tutarlılığı, borç yükü ve banka hareketlerindeki anomali sinyalleri birlikte değerlendirilmelidir."
+      : "Bu başvuru orta riskte. Otomatik onay yerine uzman yorumu gerekir; karar gelir, borç ve belge tutarlılığına göre netleştirilmelidir.",
+    riskSignals: riskSignals.length ? riskSignals.slice(0, 6) : ["Risk seviyesi uzman incelemesi gerektirecek bandda hesaplandı."],
+    documentFindings: documentFindings.length ? documentFindings.slice(0, 6) : ["Belge skorlarında karar öncesi manuel kontrol gerektiren sinyaller bulunuyor."],
+    reviewFocus,
+  };
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((item) => String(item || "").trim()).filter(Boolean)));
 }
 
 function WorkflowLine({ title, text, tone }: { title: string; text: string; tone: "gold" | "green" | "red" }) {

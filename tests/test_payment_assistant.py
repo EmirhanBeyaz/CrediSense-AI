@@ -24,12 +24,13 @@ def test_payment_assistant_returns_next_payment() -> None:
     assert "payment_screen_open" in answer["allowed_actions"]
 
 
-def test_payment_assistant_early_payment_requires_bank_support() -> None:
-    answer = answer_payment_question(_payment_plan(), "early_payment")
+def test_payment_assistant_early_payment_uses_wallet_balance() -> None:
+    answer = answer_payment_question(_payment_plan(), "early_payment", wallet={"balance": 300000, "currency": "TRY"})
 
     assert answer["intent"] == "early_payment"
-    assert answer["requires_bank_support"] is True
-    assert "early_payment_request" in answer["allowed_actions"]
+    assert answer["requires_bank_support"] is False
+    assert answer["data"]["can_pay_from_wallet"] is True
+    assert "wallet_view" in answer["allowed_actions"]
 
 
 def test_payment_assistant_unknown_question_is_safe() -> None:
@@ -94,6 +95,36 @@ def test_payment_assistant_returns_monthly_payment() -> None:
 
     assert answer["intent"] == "monthly_payment"
     assert answer["data"]["monthly_payment"] == 9810.55
+
+
+def test_payment_assistant_answers_pending_installment_question() -> None:
+    answer = answer_payment_message(_payment_plan(), "Bekleyen taksitim var mı?")
+
+    assert answer["intent"] == "pending_installments"
+    assert answer["data"]["pending_installment_count"] == 1
+    assert "Sıradaki taksit" in answer["message"]
+
+
+def test_payment_assistant_answers_no_pending_installments() -> None:
+    plan = _payment_plan()
+    plan["schedule"][0]["status"] = "paid"
+
+    answer = answer_payment_message(plan, "Bekleyen taksitim var mı?")
+
+    assert answer["intent"] == "pending_installments"
+    assert answer["data"]["pending_installment_count"] == 0
+    assert "bekleyen taksit görünmüyor" in answer["message"]
+
+
+def test_payment_assistant_answers_wallet_balance_question() -> None:
+    answer = answer_payment_message(
+        _payment_plan(),
+        "Cuzdan bakiyem siradaki taksite yeterli mi?",
+        wallet={"balance": 12000, "currency": "TRY"},
+    )
+
+    assert answer["intent"] == "wallet_balance"
+    assert answer["data"]["can_pay_next_installment"] is True
 
 
 def _payment_plan() -> dict:

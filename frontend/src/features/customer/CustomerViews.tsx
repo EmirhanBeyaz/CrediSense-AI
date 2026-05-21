@@ -6,15 +6,18 @@ import { ChartCard } from "@/components/ui/ChartCard";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { MetricCard } from "@/components/ui/MetricCard";
+import { ProfileAvatar } from "@/components/ui/ProfileAvatar";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Stepper } from "@/components/ui/Stepper";
 import { UploadCard } from "@/components/ui/UploadCard";
 import { initialDocuments } from "@/lib/demoData";
 import { formatCurrency, scorePercent } from "@/lib/format";
+import { fileToProfileImage } from "@/lib/profileImage";
 import { startAnalysis as startBackendAnalysis } from "@/services/analysisService";
 import { getCustomerApplications } from "@/services/applicationService";
+import { updateCurrentProfile } from "@/services/authService";
 import { getDocuments, uploadDocument } from "@/services/documentService";
-import { getApprovedLoanPlan } from "@/services/paymentService";
+import { getApprovedLoanPlan, getWallet, payInstallmentFromWallet, payRemainingPrincipalFromWallet, topUpWallet, type WalletTopUpInput } from "@/services/paymentService";
 import { sendAssistantMessage } from "@/services/assistantService";
 import type {
   AnalysisResult,
@@ -26,12 +29,14 @@ import type {
   PaymentPlan,
   UploadedDocument,
   User,
+  Wallet,
 } from "@/types";
 
 type CustomerViewsProps = {
   activeView: CustomerView;
   onAccountDeleted: () => Promise<void>;
   onNavigate: (view: CustomerView) => void;
+  onUserUpdate: (user: User) => void;
   showToast: (message: string) => void;
   user: User;
 };
@@ -67,7 +72,7 @@ const baseStages: AnalysisStage[] = [
   { id: "risk", title: "Risk Tahmini", description: "Karar destek skoru üretilir.", status: "bekliyor" },
 ];
 
-export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showToast, user }: CustomerViewsProps) {
+export function CustomerViews({ activeView, onAccountDeleted, onNavigate, onUserUpdate, showToast, user }: CustomerViewsProps) {
   const [applicationDocuments, setApplicationDocuments] = useState<UploadedDocument[]>(() => createDocumentPackage());
   const [savedDocuments, setSavedDocuments] = useState<UploadedDocument[]>(() => createDocumentPackage());
   const [form, setForm] = useState<ApplicationForm>(() => buildDefaultForm(user));
@@ -79,6 +84,9 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
   const [analysisMessage, setAnalysisMessage] = useState("");
   const [kvkkAccepted, setKvkkAccepted] = useState(false);
   const [paymentPlan, setPaymentPlan] = useState<PaymentPlan | null>(null);
+  const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [walletActionLoading, setWalletActionLoading] = useState(false);
+  const [profileImageLoading, setProfileImageLoading] = useState(false);
   const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>(() => [
     buildAssistantGreeting(user),
   ]);
@@ -94,7 +102,7 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
 
   useEffect(() => {
     setAssistantMessages((items) => {
-      const nextGreeting = buildAssistantGreeting(user, paymentPlan);
+      const nextGreeting = buildAssistantGreeting(user, paymentPlan, wallet);
       if (!items.length) {
         return [nextGreeting];
       }
@@ -103,7 +111,7 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
       }
       return [nextGreeting, ...items.slice(1)];
     });
-  }, [user.fullName, paymentPlan?.loan_id, paymentPlan?.monthly_payment, paymentPlan?.remaining_principal]);
+  }, [user.fullName, paymentPlan?.loan_id, paymentPlan?.monthly_payment, paymentPlan?.remaining_principal, wallet?.balance]);
 
   useEffect(() => {
     if (["customer-home", "documents", "bank-approval", "payment-plan", "assistant", "customer-profile"].includes(activeView)) {
@@ -124,10 +132,11 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
   }, [activeView]);
 
   async function refreshCustomerData() {
-    const [documentResult, applicationResult, paymentResult] = await Promise.allSettled([
+    const [documentResult, applicationResult, paymentResult, walletResult] = await Promise.allSettled([
       getDocuments(createDocumentPackage()),
       getCustomerApplications(),
       getApprovedLoanPlan(),
+      getWallet(),
     ]);
 
     const nextApplications = applicationResult.status === "fulfilled" ? applicationResult.value : [];
@@ -138,6 +147,7 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
     setLatestApplication(latest);
     setSavedDocuments(mergeRequestedDocuments(nextDocuments, latest?.requested_documents || []));
     setPaymentPlan(paymentResult.status === "fulfilled" ? paymentResult.value : null);
+    setWallet(walletResult.status === "fulfilled" ? walletResult.value : { balance: 0, currency: "TRY", transactions: [] });
   }
 
   async function handleApplicationUpload(documentId: string, file: File) {
@@ -262,6 +272,67 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
     }
   }
 
+  async function handleWalletTopUp(input: WalletTopUpInput): Promise<boolean> {
+    setWalletActionLoading(true);
+    try {
+      const updatedWallet = await topUpWallet(input);
+      setWallet(updatedWallet);
+      showToast("Cüzdan bakiyesi yüklendi.");
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Cüzdan bakiyesi yüklenemedi.");
+      return false;
+    } finally {
+      setWalletActionLoading(false);
+    }
+  }
+
+  async function handlePayInstallment(installmentNo: number) {
+    if (!paymentPlan) return;
+
+    setWalletActionLoading(true);
+    try {
+      const result = await payInstallmentFromWallet(paymentPlan.loan_id, installmentNo);
+      setPaymentPlan(result.paymentPlan);
+      setWallet(result.wallet);
+      showToast(`${installmentNo}. taksit ödendi.`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Taksit ödenemedi.");
+    } finally {
+      setWalletActionLoading(false);
+    }
+  }
+
+  async function handlePrincipalPayoff() {
+    if (!paymentPlan) return;
+
+    setWalletActionLoading(true);
+    try {
+      const result = await payRemainingPrincipalFromWallet(paymentPlan.loan_id);
+      setPaymentPlan(result.paymentPlan);
+      setWallet(result.wallet);
+      showToast("Kalan ana para faizsiz kapatıldı.");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Kalan ana para kapatılamadı.");
+    } finally {
+      setWalletActionLoading(false);
+    }
+  }
+
+  async function handleProfileImageUpload(file: File) {
+    setProfileImageLoading(true);
+    try {
+      const profileImage = await fileToProfileImage(file);
+      const updatedUser = await updateCurrentProfile({ profile_image: profileImage });
+      onUserUpdate(updatedUser);
+      showToast("Profil fotoğrafı güncellendi.");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Profil fotoğrafı güncellenemedi.");
+    } finally {
+      setProfileImageLoading(false);
+    }
+  }
+
   const applicationGroups = applicationGroupsWithApprovedCredit(customerApplications, paymentPlan, user);
   const latestPendingApplication = applicationGroups.pending[0] || null;
   const latestApprovedApplication = applicationGroups.approved[0] || null;
@@ -300,15 +371,32 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
     return <BankApproval latestApplication={focusedApplication} paymentPlan={paymentPlan} result={displayResult} onNavigate={onNavigate} />;
   }
   if (activeView === "payment-plan") {
-    return <PaymentPlanView paymentPlan={paymentPlan} />;
+    return (
+      <PaymentPlanView
+        loading={walletActionLoading}
+        onPayInstallment={handlePayInstallment}
+        onPrincipalPayoff={handlePrincipalPayoff}
+        onTopUp={handleWalletTopUp}
+        paymentPlan={paymentPlan}
+        wallet={wallet}
+      />
+    );
   }
   if (activeView === "assistant") {
-    return <AssistantView messages={assistantMessages} onSend={handleAssistantSend} paymentPlan={paymentPlan} onNavigate={onNavigate} />;
+    return <AssistantView messages={assistantMessages} onSend={handleAssistantSend} paymentPlan={paymentPlan} wallet={wallet} onNavigate={onNavigate} />;
   }
   if (activeView === "customer-settings") {
     return <SettingsView onAccountDeleted={onAccountDeleted} user={user} />;
   }
-  return <ProfileView applications={customerApplications} paymentPlan={paymentPlan} user={user} />;
+  return (
+    <ProfileView
+      applications={customerApplications}
+      onProfileImageUpload={handleProfileImageUpload}
+      paymentPlan={paymentPlan}
+      profileImageLoading={profileImageLoading}
+      user={user}
+    />
+  );
 }
 
 function CustomerHome({
@@ -429,9 +517,6 @@ function NewApplication({
       <Card>
         <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Başvuru Formu</p>
         <h2 className="mt-2 font-display text-3xl font-bold">Finansal bilgiler</h2>
-        <p className="mt-2 text-sm text-muted">
-          Kimlik, gelir ve borç alanları yüklenen belgelerden alınır. Bu ekranda yalnızca kredi tutarı ve vade girilir.
-        </p>
         <div className="mt-5 grid gap-4 md:grid-cols-2">
           {formFieldOrder.map((key) => {
             const editable = editableFormFields.has(key);
@@ -732,7 +817,21 @@ function BankApproval({
   );
 }
 
-function PaymentPlanView({ paymentPlan }: { paymentPlan: PaymentPlan | null }) {
+function PaymentPlanView({
+  paymentPlan,
+  wallet,
+  loading,
+  onTopUp,
+  onPayInstallment,
+  onPrincipalPayoff,
+}: {
+  paymentPlan: PaymentPlan | null;
+  wallet: Wallet | null;
+  loading: boolean;
+  onTopUp: (input: WalletTopUpInput) => Promise<boolean>;
+  onPayInstallment: (installmentNo: number) => Promise<void>;
+  onPrincipalPayoff: () => Promise<void>;
+}) {
   if (!paymentPlan) {
     return (
       <Card>
@@ -744,37 +843,264 @@ function PaymentPlanView({ paymentPlan }: { paymentPlan: PaymentPlan | null }) {
     );
   }
 
+  const walletBalance = wallet?.balance || 0;
+  const monthlyInterestText = paymentPlan.monthly_interest_rate > 0 ? `%${(paymentPlan.monthly_interest_rate * 100).toFixed(2)}` : "-";
+  const canPayPrincipal = paymentPlan.remaining_principal > 0 && walletBalance >= paymentPlan.remaining_principal;
+
   return (
     <Card>
       <div className="grid gap-5">
         <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Ödeme Planım</p>
         <h2 className="mt-2 font-display text-4xl font-bold text-primary">{formatCurrency(paymentPlan.approved_amount)}</h2>
-        <div className="mt-6 grid gap-4 md:grid-cols-3">
+        <div className="mt-6 grid gap-4 md:grid-cols-4">
           <MetricCard label="Aylık Taksit" value={formatCurrency(paymentPlan.monthly_payment)} />
           <MetricCard label="Vade" value={`${paymentPlan.maturity_months} Ay`} tone="neutral" />
           <MetricCard label="Kalan Ana Para" value={formatCurrency(paymentPlan.remaining_principal)} />
+          <MetricCard label="Aylık Faiz" value={monthlyInterestText} tone="gold" />
         </div>
 
         <div className="mt-3 grid gap-5 xl:grid-cols-[1fr_420px] xl:items-stretch">
-          <ChartCard />
-          <section className="flex max-h-[312px] min-h-[312px] flex-col rounded-xl border border-white/10 bg-black/25 p-4">
-            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Taksitler</p>
-            <h3 className="mt-2 font-display text-2xl font-bold">Yaklaşan ödemeler</h3>
-            <div className="mt-5 grid gap-3 overflow-y-auto pr-2">
-              {paymentPlan.installments.map((installment) => (
-                <div className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-lg border border-white/10 bg-black/25 p-4" key={installment.installment_no}>
-                  <strong>Taksit {installment.installment_no}</strong>
-                  <span>{formatCurrency(installment.amount)}</span>
-                  <StatusBadge tone={installment.status === "Ödendi" ? "green" : installment.status === "Gecikmiş" ? "red" : "gold"}>
-                    {installment.status}
-                  </StatusBadge>
-                </div>
-              ))}
-            </div>
-          </section>
+          <div className="grid gap-5">
+            <PrincipalPayoffPanel
+              canPay={canPayPrincipal}
+              loading={loading}
+              onPayoff={onPrincipalPayoff}
+              remainingPrincipal={paymentPlan.remaining_principal}
+              walletBalance={walletBalance}
+            />
+            <ChartCard paymentPlan={paymentPlan} />
+            <section className="flex max-h-[360px] min-h-[360px] flex-col rounded-xl border border-white/10 bg-black/25 p-4">
+              <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Taksitler</p>
+              <h3 className="mt-2 font-display text-2xl font-bold">Yaklaşan ödemeler</h3>
+              <div className="mt-5 grid gap-3 overflow-y-auto pr-2">
+                {paymentPlan.installments.map((installment) => {
+                  const paid = installment.status === "Ödendi";
+                  const canPay = !paid && walletBalance >= installment.amount;
+                  return (
+                    <div className="grid gap-3 rounded-lg border border-white/10 bg-black/25 p-4 md:grid-cols-[1fr_auto_auto_auto] md:items-center" key={installment.installment_no}>
+                      <div>
+                        <strong>Taksit {installment.installment_no}</strong>
+                        <span className="mt-1 block text-xs text-muted">{formatDisplayDate(installment.due_date)}</span>
+                      </div>
+                      <span>{formatCurrency(installment.amount)}</span>
+                      <StatusBadge tone={paid ? "green" : installment.status === "Gecikmiş" ? "red" : "gold"}>
+                        {installment.status}
+                      </StatusBadge>
+                      <button
+                        className="rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-sm font-bold text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={loading || paid || !canPay}
+                        onClick={() => onPayInstallment(installment.installment_no)}
+                        type="button"
+                      >
+                        {paid ? "Ödendi" : "Cüzdandan öde"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+          <WalletPanel loading={loading} onTopUp={onTopUp} wallet={wallet} />
         </div>
       </div>
     </Card>
+  );
+}
+
+function PrincipalPayoffPanel({
+  remainingPrincipal,
+  walletBalance,
+  canPay,
+  loading,
+  onPayoff,
+}: {
+  remainingPrincipal: number;
+  walletBalance: number;
+  canPay: boolean;
+  loading: boolean;
+  onPayoff: () => Promise<void>;
+}) {
+  const missingAmount = Math.max(0, remainingPrincipal - walletBalance);
+  const closed = remainingPrincipal <= 0;
+
+  return (
+    <section className="rounded-xl border border-primary/20 bg-primary/10 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="font-mono text-xs uppercase tracking-[0.14em] text-primary">Tek seferde kapama</p>
+          <h3 className="mt-1 font-display text-xl font-bold">Kalan ana parayı faizsiz kapat</h3>
+          <p className="mt-2 text-sm text-muted">
+            {closed
+              ? "Kredi ana para bakiyesi kapanmış görünüyor."
+              : `Kalan ana para ${formatCurrency(remainingPrincipal)}. Bu işlem gelecek taksit faizlerini tahsil etmeden planı kapatır.`}
+          </p>
+          {!closed && !canPay ? (
+            <p className="mt-2 text-sm text-danger">Cüzdanda kapama için {formatCurrency(missingAmount)} eksik var.</p>
+          ) : null}
+        </div>
+        <button
+          className="gold-gradient rounded-lg px-5 py-3 font-bold text-black disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={loading || closed || !canPay}
+          onClick={onPayoff}
+          type="button"
+        >
+          {closed ? "Kredi kapandı" : "Ana parayı kapat"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function WalletPanel({
+  wallet,
+  loading,
+  onTopUp,
+}: {
+  wallet: Wallet | null;
+  loading: boolean;
+  onTopUp: (input: WalletTopUpInput) => Promise<boolean>;
+}) {
+  const [form, setForm] = useState({
+    amount: "",
+    card_number: "",
+    expiry_date: "",
+    cvv: "",
+    cardholder_name: "",
+  });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  function updateField(field: keyof typeof form, value: string) {
+    const nextValue = field === "card_number"
+      ? formatCardNumberInput(value)
+      : field === "expiry_date"
+        ? formatExpiryInput(value)
+        : field === "cvv"
+          ? value.replace(/\D/g, "").slice(0, 3)
+          : value;
+    setForm((current) => ({ ...current, [field]: nextValue }));
+    setErrors((current) => ({ ...current, [field]: "" }));
+  }
+
+  async function submitTopUp() {
+    const validationErrors = validateTopUpForm(form);
+    setErrors(validationErrors);
+    if (Object.keys(validationErrors).length) {
+      return;
+    }
+
+    const success = await onTopUp({
+      amount: parseMoneyValue(form.amount),
+      card_number: form.card_number,
+      expiry_date: form.expiry_date,
+      cvv: form.cvv,
+      cardholder_name: form.cardholder_name,
+    });
+    if (success) {
+      setForm({ amount: "", card_number: "", expiry_date: "", cvv: "", cardholder_name: "" });
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-white/10 bg-black/25 p-4">
+      <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Hesap Cüzdanı</p>
+      <strong className="mt-3 block font-display text-3xl text-primary">{formatCurrency(wallet?.balance || 0)}</strong>
+      <span className="text-sm text-muted">Kullanılabilir bakiye</span>
+
+      <div className="mt-6 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+        <div className="flex items-center gap-2">
+          {["VISA", "MC", "AMEX", "troy"].map((label) => (
+            <span className="rounded border border-white/10 bg-white px-2 py-1 text-[10px] font-black text-black" key={label}>{label}</span>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3">
+          <CardInput
+            error={errors.card_number}
+            label="Kart numarası"
+            onChange={(value) => updateField("card_number", value)}
+            placeholder="0000 0000 0000 0000"
+            value={form.card_number}
+          />
+          <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(96px,0.72fr)]">
+            <CardInput
+              error={errors.expiry_date}
+              label="Son kullanma tarihi"
+              onChange={(value) => updateField("expiry_date", value)}
+              placeholder="AA/YY"
+              value={form.expiry_date}
+            />
+            <CardInput
+              error={errors.cvv}
+              label="CVV"
+              onChange={(value) => updateField("cvv", value)}
+              placeholder="000"
+              value={form.cvv}
+            />
+          </div>
+          <CardInput
+            error={errors.cardholder_name}
+            label="Kart üzerindeki ad"
+            onChange={(value) => updateField("cardholder_name", value)}
+            placeholder="AD SOYAD"
+            value={form.cardholder_name}
+          />
+          <CardInput
+            error={errors.amount}
+            label="Yüklenecek tutar"
+            onChange={(value) => updateField("amount", value)}
+            placeholder="10000"
+            value={form.amount}
+          />
+          <button
+            className="gold-gradient rounded-lg px-5 py-3 font-bold text-black disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={loading}
+            onClick={submitTopUp}
+            type="button"
+          >
+            {loading ? "İşleniyor" : "Bakiyeye yükle"}
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3">
+        <p className="font-mono text-xs uppercase tracking-[0.14em] text-muted">Son işlemler</p>
+        {(wallet?.transactions || []).slice(0, 4).map((transaction) => (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 p-3 text-sm" key={transaction.transaction_id}>
+            <span className="text-muted">{transaction.description || "Cüzdan işlemi"}</span>
+            <strong className={transaction.amount < 0 ? "text-danger" : "text-secondary"}>{formatCurrency(transaction.amount)}</strong>
+          </div>
+        ))}
+        {!wallet?.transactions?.length ? <span className="text-sm text-muted">Henüz cüzdan işlemi yok.</span> : null}
+      </div>
+    </section>
+  );
+}
+
+function CardInput({
+  label,
+  value,
+  placeholder,
+  error,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  error?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="grid min-w-0 gap-1 text-sm text-muted">
+      <span className="truncate">{label}</span>
+      <input
+        className={`h-12 w-full min-w-0 rounded-lg border bg-black/30 px-4 py-3 text-white outline-none transition-colors focus:border-primary/60 ${error ? "border-danger/70" : "border-white/10"}`}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        value={value}
+      />
+      <span className="min-h-4 text-xs leading-4 text-danger">
+        {error || null}
+      </span>
+    </label>
   );
 }
 
@@ -782,11 +1108,13 @@ function AssistantView({
   messages,
   onSend,
   paymentPlan,
+  wallet,
   onNavigate,
 }: {
   messages: AssistantMessage[];
   onSend: (message: string) => Promise<void>;
   paymentPlan: PaymentPlan | null;
+  wallet: Wallet | null;
   onNavigate: (view: CustomerView) => void;
 }) {
   const [message, setMessage] = useState("");
@@ -862,6 +1190,10 @@ function AssistantView({
         <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Kredi Özeti</p>
         <strong className="mt-4 block font-display text-3xl text-primary">{formatCurrency(paymentPlan.remaining_principal)}</strong>
         <span className="text-sm text-muted">Toplam kalan borç</span>
+        <div className="mt-5 rounded-lg border border-white/10 bg-black/25 p-4">
+          <span className="text-xs uppercase tracking-[0.12em] text-muted">Cüzdan bakiyesi</span>
+          <strong className="mt-1 block text-xl text-secondary">{formatCurrency(wallet?.balance || 0)}</strong>
+        </div>
         <div className="mt-8 grid gap-3">
           {assistantQuickQuestions(paymentPlan).map((question) => (
             <button
@@ -880,11 +1212,12 @@ function AssistantView({
   );
 }
 
-function buildAssistantGreeting(user: User, paymentPlan?: PaymentPlan | null): AssistantMessage {
+function buildAssistantGreeting(user: User, paymentPlan?: PaymentPlan | null, wallet?: Wallet | null): AssistantMessage {
   const salutation = customerSalutation(user.fullName);
   const planSummary = paymentPlan
     ? `Kalan ana para ${formatCurrency(paymentPlan.remaining_principal)}, aylık taksit ${formatCurrency(paymentPlan.monthly_payment)} olarak görünüyor.`
     : "Ödeme planınız oluştuğunda kalan borç, taksit ve erken kapama bilgilerini buradan takip edebilirsiniz.";
+  const walletText = wallet ? ` Cüzdan bakiyeniz ${formatCurrency(wallet.balance)}.` : "";
   const nextInstallment = paymentPlan ? nextPendingInstallment(paymentPlan) : null;
   const nextPaymentText = nextInstallment
     ? ` Sıradaki taksit ${formatDisplayDate(nextInstallment.due_date)} tarihinde ${formatCurrency(nextInstallment.amount)}.`
@@ -893,7 +1226,7 @@ function buildAssistantGreeting(user: User, paymentPlan?: PaymentPlan | null): A
   return {
     id: "assistant-greeting",
     sender: "assistant",
-    text: `Merhaba ${salutation}. ${planSummary}${nextPaymentText} Size nasıl yardımcı olabilirim?`,
+    text: `Merhaba ${salutation}. ${planSummary}${walletText}${nextPaymentText} Size nasıl yardımcı olabilirim?`,
   };
 }
 
@@ -909,6 +1242,7 @@ function assistantQuickQuestions(paymentPlan: PaymentPlan): string[] {
     "Aylık taksitim ne kadar?",
     nextQuestion,
     `Kaç taksitim kaldı? (${remainingInstallmentCount})`,
+    "Cüzdan bakiyem sıradaki taksite yeterli mi?",
     "Toplam geri ödeme tutarım ne kadar?",
     "Erken kapama yapabilir miyim?",
     "Gecikmiş ödemem var mı?",
@@ -955,13 +1289,125 @@ function formatDisplayDate(value: string): string {
   }).format(date);
 }
 
+function validateTopUpForm(form: {
+  amount: string;
+  card_number: string;
+  expiry_date: string;
+  cvv: string;
+  cardholder_name: string;
+}) {
+  const errors: Record<string, string> = {};
+  const amount = parseMoneyValue(form.amount);
+  const cardDigits = form.card_number.replace(/\D/g, "");
+  const cvvDigits = form.cvv.replace(/\D/g, "");
+  const expiryStatus = validateExpiryDate(form.expiry_date);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    errors.amount = "Yüklenecek tutar girilmeli.";
+  }
+  if (cardDigits.length !== 16) {
+    errors.card_number = "Kart numarası 16 haneli olmalı.";
+  }
+  if (expiryStatus) {
+    errors.expiry_date = expiryStatus;
+  }
+  if (cvvDigits.length !== 3) {
+    errors.cvv = "CVV 3 haneli olmalı.";
+  }
+  if (!isRealisticCardholderName(form.cardholder_name)) {
+    errors.cardholder_name = "Kart üzerindeki ad ve soyad gerçek isim formatında olmalı.";
+  }
+
+  return errors;
+}
+
+function validateExpiryDate(value: string) {
+  const match = /^(0[1-9]|1[0-2])\/(\d{2})$/.exec(value);
+  if (!match) {
+    return "AA/YY formatında girilmeli.";
+  }
+
+  const expiryMonth = Number(match[1]);
+  const expiryYear = 2000 + Number(match[2]);
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const expiryMonthStart = new Date(expiryYear, expiryMonth - 1, 1);
+  if (expiryMonthStart < currentMonthStart) {
+    return "Kart son kullanma tarihi geçmiş olamaz.";
+  }
+
+  return "";
+}
+
+function isRealisticCardholderName(value: string) {
+  const nameParts = value
+    .trim()
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+  const letterPattern = /^[A-Za-zÇĞİÖŞÜçğıöşü'.-]+$/;
+  const vowelPattern = /[AEIİOÖUÜaeıioöuü]/;
+
+  return (
+    nameParts.length >= 2
+    && nameParts.every((part) => part.length >= 2 && letterPattern.test(part) && vowelPattern.test(part))
+  );
+}
+
+function formatCardNumberInput(value: string) {
+  return value
+    .replace(/\D/g, "")
+    .slice(0, 16)
+    .replace(/(\d{4})(?=\d)/g, "$1 ")
+    .trim();
+}
+
+function formatExpiryInput(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 4);
+  if (digits.length <= 2) {
+    return digits;
+  }
+  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+}
+
+function parseMoneyValue(value: unknown) {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return Number.NaN;
+  }
+
+  let text = value.replace(/[^0-9,.\-]/g, "");
+  if (!text) {
+    return Number.NaN;
+  }
+
+  if (text.includes(",") && text.includes(".")) {
+    text = text.replace(/\./g, "").replace(",", ".");
+  } else if (text.includes(",")) {
+    text = text.replace(/\./g, "").replace(",", ".");
+  } else if (text.includes(".")) {
+    const parts = text.split(".");
+    if (parts.length > 1 && parts.slice(1).every((part) => part.length === 3)) {
+      text = parts.join("");
+    }
+  }
+
+  return Number(text);
+}
+
 function ProfileView({
   applications,
+  onProfileImageUpload,
   paymentPlan,
+  profileImageLoading,
   user,
 }: {
   applications: ApplicationRecord[];
+  onProfileImageUpload: (file: File) => void;
   paymentPlan: PaymentPlan | null;
+  profileImageLoading: boolean;
   user: User;
 }) {
   const groups = applicationGroupsWithApprovedCredit(applications, paymentPlan, user);
@@ -970,10 +1416,19 @@ function ProfileView({
     <div className="grid gap-5">
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-5">
-          <div>
-            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Profil</p>
-            <h2 className="mt-2 font-display text-3xl font-bold">{user.fullName}</h2>
-            <p className="mt-2 text-muted">{user.email}</p>
+          <div className="flex flex-wrap items-center gap-5">
+            <ProfileAvatar
+              editable
+              loading={profileImageLoading}
+              onImageSelected={onProfileImageUpload}
+              size="lg"
+              user={user}
+            />
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Profil</p>
+              <h2 className="mt-2 font-display text-3xl font-bold">{user.fullName}</h2>
+              <p className="mt-2 text-muted">{user.email}</p>
+            </div>
           </div>
           <StatusBadge tone={user.emailVerified ? "green" : "gold"}>
             {user.emailVerified ? "E-posta doğrulandı" : "Doğrulama bekliyor"}
@@ -1259,7 +1714,7 @@ function ExtraDocumentNotice({
 function formLabel(key: string): string {
   const labels: Record<string, string> = {
     full_name: "Ad Soyad",
-    test_id: "Test Kimlik No",
+    test_id: "Kimlik Numarası",
     birth_date: "Doğum Tarihi",
     employer: "İşveren",
     declared_income: "Beyan Edilen Gelir",

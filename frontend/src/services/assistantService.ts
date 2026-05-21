@@ -33,6 +33,9 @@ function fallbackAnswer(message: string): string {
   if (normalized.includes("kalan")) {
     return "Kalan ana para banka onaylı ödeme planından alınır. Net kapama tutarı banka tarafından kesinleştirilmelidir.";
   }
+  if (normalized.includes("cüzdan") || normalized.includes("bakiye")) {
+    return "Cüzdan bakiyesi ve sıradaki taksiti ödemeye yetip yetmediği ödeme planı ekranındaki güncel bakiyeden alınır.";
+  }
   if (normalized.includes("erken")) {
     return "Erken kapama talebi oluşturabilirsiniz. Nihai kapama tutarı banka onayından sonra kesinleşir.";
   }

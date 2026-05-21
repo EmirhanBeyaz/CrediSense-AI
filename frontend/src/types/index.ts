@@ -34,6 +34,7 @@ export type User = {
   role: Role;
   title: string;
   profile?: {
+    profile_image?: string;
     test_id?: string;
     birth_date?: string;
     employer?: string;
@@ -44,6 +45,9 @@ export type User = {
     current_debt?: number;
     active_loan_id?: string;
     active_application_id?: string;
+    wallet_balance?: number;
+    monthly_interest_rate?: number;
+    annual_interest_rate?: number;
     [key: string]: unknown;
   };
 };
@@ -141,12 +145,43 @@ export type PaymentPlan = {
   monthly_payment: number;
   maturity_months: number;
   remaining_principal: number;
+  monthly_interest_rate: number;
+  annual_interest_rate: number;
+  total_payment: number;
+  total_interest: number;
+  interest_policy?: {
+    min_monthly_interest_rate?: number;
+    max_monthly_interest_rate?: number;
+    assigned_monthly_interest_rate?: number;
+    effective_monthly_interest_rate?: number;
+    rate_source?: string;
+    reason?: string;
+  };
   installments: Array<{
     installment_no: number;
     due_date: string;
     amount: number;
     status: string;
+    paid_date?: string;
   }>;
+};
+
+export type WalletTransaction = {
+  transaction_id: string;
+  type: string;
+  amount: number;
+  currency: string;
+  description?: string;
+  created_at?: string;
+  loan_id?: string;
+  installment_no?: number;
+  card_last4?: string;
+};
+
+export type Wallet = {
+  balance: number;
+  currency: string;
+  transactions: WalletTransaction[];
 };
 
 export type ReportSummary = {

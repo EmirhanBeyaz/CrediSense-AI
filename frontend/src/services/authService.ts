@@ -171,6 +171,19 @@ export async function deleteCurrentAccount(): Promise<void> {
   clearAuthToken();
 }
 
+export async function updateCurrentProfile(profile: Record<string, unknown>): Promise<User> {
+  const response = await apiRequest<{ user: ApiUser }>(endpoints.profile, {
+    method: "PUT",
+    body: { profile },
+  });
+
+  if (!response.data) {
+    throw new Error(response.error || "Profil guncellenemedi.");
+  }
+
+  return mapUser(response.data.user);
+}
+
 export function logout() {
   clearAuthToken();
 }

@@ -56,6 +56,7 @@ def apply_bank_decision(
     note: str = "",
     actor: str = "bank_user",
     requested_documents: list[str] | None = None,
+    credit_offer: dict | None = None,
 ) -> dict:
     """Banka uzmanı kararını başvuru kaydına işler."""
 
@@ -83,6 +84,7 @@ def apply_bank_decision(
         note=decision_note,
         actor=actor,
         requested_documents=requested_documents or [],
+        credit_offer=_normalize_credit_offer(credit_offer) if decision_type == "approve" else {},
     )
     updated_record["user_notification"] = {
         "message": decision_rule["user_message"],
@@ -128,6 +130,7 @@ def _bank_decision_payload(
     note: str,
     actor: str,
     requested_documents: list[str],
+    credit_offer: dict,
 ) -> dict:
     """Başvuru kaydında saklanacak banka kararı özetini üretir."""
 
@@ -138,7 +141,24 @@ def _bank_decision_payload(
         "note": note,
         "actor": actor,
         "requested_documents": requested_documents,
+        "credit_offer": credit_offer,
     }
+
+
+def _normalize_credit_offer(credit_offer: dict | None) -> dict:
+    """Uzmanin onay kararına ekledigi kredi kosullarini saklanabilir hale getirir."""
+
+    if not isinstance(credit_offer, dict):
+        return {}
+
+    normalized = {}
+    if credit_offer.get("approved_amount") not in (None, ""):
+        normalized["approved_amount"] = credit_offer["approved_amount"]
+    if credit_offer.get("term_months") not in (None, ""):
+        normalized["term_months"] = credit_offer["term_months"]
+    if credit_offer.get("monthly_interest_rate") not in (None, ""):
+        normalized["monthly_interest_rate"] = credit_offer["monthly_interest_rate"]
+    return normalized
 
 
 def _user_actions_after_decision(decision_type: str) -> list[str]:

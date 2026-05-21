@@ -89,6 +89,17 @@ export const demoPaymentPlan: PaymentPlan = {
   monthly_payment: 7950,
   maturity_months: 36,
   remaining_principal: 163420,
+  monthly_interest_rate: 0.025,
+  annual_interest_rate: 0.3449,
+  total_payment: 286200,
+  total_interest: 86200,
+  interest_policy: {
+    min_monthly_interest_rate: 0.0185,
+    max_monthly_interest_rate: 0.0425,
+    assigned_monthly_interest_rate: 0.025,
+    effective_monthly_interest_rate: 0.025,
+    rate_source: "demo",
+  },
   installments: [
     { installment_no: 7, due_date: "2026-06-15", amount: 7950, status: "Gecikmiş" },
     { installment_no: 8, due_date: "2026-07-15", amount: 7950, status: "Yaklaşıyor" },

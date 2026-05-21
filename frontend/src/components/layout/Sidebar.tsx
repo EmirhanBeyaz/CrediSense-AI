@@ -1,4 +1,5 @@
 import type { AppView, Role, User } from "@/types";
+import { ProfileAvatar } from "@/components/ui/ProfileAvatar";
 
 type MenuItem = {
   id: AppView;
@@ -52,9 +53,7 @@ export function Sidebar({ role, user, activeView, onNavigate, onLogout }: Sideba
 
       <div className="mb-7 rounded-xl border border-white/10 bg-white/[0.04] p-4">
         <div className="flex items-center gap-3">
-          <div className="gold-gradient grid h-11 w-11 place-items-center rounded-lg font-bold text-black">
-            {user.fullName.split(" ").map((part) => part[0]).join("").slice(0, 2)}
-          </div>
+          <ProfileAvatar user={user} />
           <div>
             <strong className="block">{user.fullName}</strong>
             <span className="text-sm text-muted">{user.title}</span>

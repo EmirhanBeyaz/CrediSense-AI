@@ -13,7 +13,7 @@ import shutil
 import tempfile
 import unicodedata
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -61,7 +61,7 @@ from .odeme_deposu import (
     list_payment_plans,
     save_payment_plan,
 )
-from .odeme_plani import build_payment_plan, update_installment_status
+from .odeme_plani import build_payment_plan, close_plan_with_principal_payoff, remaining_principal_for_plan, update_installment_status
 from .rapor_uret import create_analysis_reports, report_files_to_dict
 from .rapor_deposu import DEFAULT_REPORT_STORE, list_report_records, save_expert_report_record, save_report_record
 from .yol_ayarlari import project_path
@@ -135,6 +135,14 @@ class ProfileUpdateRequest(BaseModel):
     profile: dict = Field(default_factory=dict)
 
 
+class CreditOfferRequest(BaseModel):
+    """Uzmanin onay sirasinda belirleyebilecegi kredi kosullari."""
+
+    approved_amount: float | None = None
+    term_months: int | None = None
+    monthly_interest_rate: float | None = None
+
+
 class BankDecisionRequest(BaseModel):
     """Banka uzmanı karar isteği."""
 
@@ -142,6 +150,7 @@ class BankDecisionRequest(BaseModel):
     note: str = ""
     actor: str = "bank_user"
     requested_documents: list[str] = Field(default_factory=list)
+    credit_offer: CreditOfferRequest | None = None
 
 
 class ExpertReportRequest(BaseModel):
@@ -154,7 +163,7 @@ class ExpertReportRequest(BaseModel):
 class PaymentPlanRequest(BaseModel):
     """Odeme plani olusturma istegi."""
 
-    monthly_interest_rate: float = 0.025
+    monthly_interest_rate: float | None = None
     first_due_date: str = ""
 
 
@@ -172,6 +181,28 @@ class PaymentAssistantRequest(BaseModel):
     question_type: str = ""
     message: str = ""
     today: str = ""
+
+
+class WalletTopUpRequest(BaseModel):
+    """Cuzdana kart ile bakiye yukleme istegi."""
+
+    amount: float
+    card_number: str
+    expiry_date: str
+    cvv: str
+    cardholder_name: str
+
+
+class WalletInstallmentPaymentRequest(BaseModel):
+    """Cuzdan bakiyesi ile taksit odeme istegi."""
+
+    note: str = "Cüzdan bakiyesi ile ödeme"
+
+
+class PrincipalPayoffRequest(BaseModel):
+    """Kalan ana parayi tek seferde kapatma istegi."""
+
+    note: str = "Kalan ana para cüzdan bakiyesi ile faizsiz kapatıldı"
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -499,6 +530,41 @@ def get_my_payment_plan(current_user: Annotated[dict, Depends(_require_current_u
     return payment_plan
 
 
+@app.get("/me/wallet")
+def get_my_wallet(current_user: Annotated[dict, Depends(_require_current_user)]) -> dict:
+    """Musterinin kredi odemelerinde kullanacagi cuzdan bilgisini dondurur."""
+
+    _require_customer(current_user)
+    return _wallet_payload(current_user)
+
+
+@app.post("/me/wallet/top-up")
+def top_up_my_wallet(
+    top_up_request: WalletTopUpRequest,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
+    """Kart formati dogrulanmis test odemesiyle cuzdan bakiyesi yukler."""
+
+    _require_customer(current_user)
+    card_info = _validate_wallet_top_up_request(top_up_request)
+    balance = _wallet_balance(current_user)
+    next_balance = round(balance + round(float(top_up_request.amount), 2), 2)
+    updated_user = _save_wallet_state(
+        current_user,
+        balance=next_balance,
+        transaction={
+            "transaction_id": _wallet_transaction_id("TOPUP"),
+            "type": "top_up",
+            "amount": round(float(top_up_request.amount), 2),
+            "currency": "TRY",
+            "description": "Kart ile cüzdan bakiyesi yüklendi.",
+            "card_last4": card_info["card_last4"],
+            "created_at": _now_iso_seconds(),
+        },
+    )
+    return _wallet_payload(updated_user)
+
+
 @app.post("/documents")
 async def upload_document(
     document: Annotated[UploadFile, File(description="Kaydedilecek PDF belgesi")],
@@ -747,12 +813,14 @@ def decide_application(
         raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
 
     try:
+        credit_offer = _model_to_dict(decision_request.credit_offer) if decision_request.credit_offer else {}
         updated_record = apply_bank_decision(
             record,
             decision_type=decision_request.decision_type,
             note=decision_request.note,
             actor=decision_request.actor,
             requested_documents=decision_request.requested_documents,
+            credit_offer=credit_offer,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -897,6 +965,130 @@ def update_payment_installment(
     return updated_plan
 
 
+@app.post("/payment-plans/{loan_id}/installments/{installment_no}/pay")
+def pay_payment_installment_from_wallet(
+    loan_id: str,
+    installment_no: int,
+    payment_request: WalletInstallmentPaymentRequest,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
+    """Musteri cuzdan bakiyesiyle tek taksiti oder ve plan durumunu gunceller."""
+
+    _require_customer(current_user)
+    payment_plan = get_payment_plan(loan_id, store_path=PAYMENT_STORE_PATH)
+    if not payment_plan:
+        raise HTTPException(status_code=404, detail="Ödeme planı bulunamadı.")
+    _ensure_payment_plan_access(payment_plan, current_user)
+
+    installment = _find_installment(payment_plan, installment_no)
+    if not installment:
+        raise HTTPException(status_code=404, detail="Taksit bulunamadı.")
+    if installment.get("status") == "paid":
+        raise HTTPException(status_code=400, detail="Bu taksit zaten ödenmiş.")
+
+    payment_amount = round(_safe_float(installment.get("payment_amount", installment.get("amount", 0))), 2)
+    wallet_balance = _wallet_balance(current_user)
+    if wallet_balance < payment_amount:
+        raise HTTPException(status_code=400, detail="Cüzdan bakiyesi bu taksiti ödemek için yetersiz.")
+
+    paid_date = date.today().isoformat()
+    try:
+        updated_plan = update_installment_status(
+            payment_plan,
+            installment_no=installment_no,
+            status="paid",
+            paid_date=paid_date,
+            note=payment_request.note or "Cüzdan bakiyesi ile ödeme",
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    save_payment_plan(updated_plan, store_path=PAYMENT_STORE_PATH)
+    updated_user = _save_wallet_state(
+        current_user,
+        balance=round(wallet_balance - payment_amount, 2),
+        transaction={
+            "transaction_id": _wallet_transaction_id("PAY"),
+            "type": "installment_payment",
+            "amount": -payment_amount,
+            "currency": "TRY",
+            "description": f"{installment_no}. taksit cüzdan bakiyesi ile ödendi.",
+            "loan_id": loan_id,
+            "installment_no": installment_no,
+            "created_at": _now_iso_seconds(),
+        },
+        extra_profile_updates={
+            "current_debt": updated_plan.get("payment_summary", {}).get(
+                "remaining_principal_after_last_payment",
+                updated_plan.get("principal", 0),
+            ),
+        },
+    )
+
+    return {
+        "payment_plan": updated_plan,
+        "wallet": _wallet_payload(updated_user),
+        "paid_installment": _find_installment(updated_plan, installment_no),
+    }
+
+
+@app.post("/payment-plans/{loan_id}/principal-payoff")
+def pay_remaining_principal_from_wallet(
+    loan_id: str,
+    payoff_request: PrincipalPayoffRequest,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
+    """Musteri kalan ana parayi faizsiz tek odemeyle cuzdanindan kapatir."""
+
+    _require_customer(current_user)
+    payment_plan = get_payment_plan(loan_id, store_path=PAYMENT_STORE_PATH)
+    if not payment_plan:
+        raise HTTPException(status_code=404, detail="Ödeme planı bulunamadı.")
+    _ensure_payment_plan_access(payment_plan, current_user)
+
+    remaining_principal = remaining_principal_for_plan(payment_plan)
+    if remaining_principal <= 0:
+        raise HTTPException(status_code=400, detail="Kapatılacak kalan ana para bulunmuyor.")
+
+    wallet_balance = _wallet_balance(current_user)
+    if wallet_balance < remaining_principal:
+        raise HTTPException(status_code=400, detail="Cüzdan bakiyesi kalan ana parayı kapatmak için yetersiz.")
+
+    paid_date = date.today().isoformat()
+    try:
+        updated_plan = close_plan_with_principal_payoff(
+            payment_plan,
+            paid_date=paid_date,
+            note=payoff_request.note or "Kalan ana para cüzdan bakiyesi ile faizsiz kapatıldı",
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    save_payment_plan(updated_plan, store_path=PAYMENT_STORE_PATH)
+    updated_user = _save_wallet_state(
+        current_user,
+        balance=round(wallet_balance - remaining_principal, 2),
+        transaction={
+            "transaction_id": _wallet_transaction_id("PAYOFF"),
+            "type": "principal_payoff",
+            "amount": -round(remaining_principal, 2),
+            "currency": "TRY",
+            "description": "Kalan ana para tek seferde faizsiz kapatıldı.",
+            "loan_id": loan_id,
+            "created_at": _now_iso_seconds(),
+        },
+        extra_profile_updates={
+            "current_debt": 0,
+        },
+    )
+
+    return {
+        "payment_plan": updated_plan,
+        "wallet": _wallet_payload(updated_user),
+        "payoff": updated_plan.get("early_payoff", {}),
+    }
+
+
 @app.post("/payment-plans/{loan_id}/assistant")
 def ask_payment_assistant(
     loan_id: str,
@@ -911,8 +1103,9 @@ def ask_payment_assistant(
     _ensure_payment_plan_access(payment_plan, current_user)
 
     today = _parse_optional_date(assistant_request.today, field_name="today")
+    wallet = _wallet_payload(current_user) if current_user.get("role") == "customer" else None
     if assistant_request.message.strip():
-        response = answer_payment_message(payment_plan, assistant_request.message, today=today)
+        response = answer_payment_message(payment_plan, assistant_request.message, today=today, wallet=wallet)
         saved_message = save_assistant_exchange(
             user_id=current_user["user_id"],
             loan_id=loan_id,
@@ -924,7 +1117,7 @@ def ask_payment_assistant(
         return response
 
     question_type = assistant_request.question_type.strip() or "summary"
-    response = answer_payment_question(payment_plan, question_type, today=today)
+    response = answer_payment_question(payment_plan, question_type, today=today, wallet=wallet)
     saved_message = save_assistant_exchange(
         user_id=current_user["user_id"],
         loan_id=loan_id,
@@ -1166,6 +1359,122 @@ def _password_reset_response(user: dict, token_info: dict, mail_result: dict) ->
     return response
 
 
+def _wallet_payload(user: dict) -> dict:
+    """Kullanici profilindeki cuzdan bilgisini frontend formatinda dondurur."""
+
+    profile = user.get("profile", {})
+    transactions = profile.get("wallet_transactions", [])
+    if not isinstance(transactions, list):
+        transactions = []
+    return {
+        "balance": _wallet_balance(user),
+        "currency": "TRY",
+        "transactions": transactions[:30],
+    }
+
+
+def _wallet_balance(user: dict) -> float:
+    return round(_safe_float(user.get("profile", {}).get("wallet_balance", 0)), 2)
+
+
+def _save_wallet_state(
+    user: dict,
+    balance: float,
+    transaction: dict,
+    extra_profile_updates: dict | None = None,
+) -> dict:
+    """Cuzdan bakiyesi ve islem gecmisini kullanici profiline yazar."""
+
+    profile = user.get("profile", {})
+    transactions = profile.get("wallet_transactions", [])
+    if not isinstance(transactions, list):
+        transactions = []
+
+    profile_updates = {
+        "wallet_balance": round(balance, 2),
+        "wallet_transactions": [transaction, *transactions][:30],
+    }
+    if extra_profile_updates:
+        profile_updates.update(extra_profile_updates)
+
+    try:
+        return update_user_profile(user["user_id"], profile_updates, store_path=USER_STORE_PATH)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+def _validate_wallet_top_up_request(top_up_request: WalletTopUpRequest) -> dict:
+    """Kart alanlarini gercekci format kurallariyla kontrol eder."""
+
+    amount = round(float(top_up_request.amount), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Yüklenecek bakiye 0 TL'den büyük olmalı.")
+
+    card_number = re.sub(r"\D", "", top_up_request.card_number)
+    if len(card_number) != 16:
+        raise HTTPException(status_code=400, detail="Kart numarası 16 haneli olmalı.")
+
+    expiry_match = re.fullmatch(r"\s*(0[1-9]|1[0-2])\s*/?\s*(\d{2})\s*", top_up_request.expiry_date)
+    if not expiry_match:
+        raise HTTPException(status_code=400, detail="Son kullanma tarihi AA/YY formatında olmalı.")
+
+    expiry_month = int(expiry_match.group(1))
+    expiry_year = 2000 + int(expiry_match.group(2))
+    current_month_start = date.today().replace(day=1)
+    expiry_month_start = date(expiry_year, expiry_month, 1)
+    if expiry_month_start < current_month_start:
+        raise HTTPException(status_code=400, detail="Kart son kullanma tarihi geçmiş olamaz.")
+
+    cvv = re.sub(r"\D", "", top_up_request.cvv)
+    if len(cvv) != 3:
+        raise HTTPException(status_code=400, detail="CVV 3 haneli olmalı.")
+
+    cardholder_name = " ".join(top_up_request.cardholder_name.strip().split())
+    if not _looks_like_cardholder_name(cardholder_name):
+        raise HTTPException(status_code=400, detail="Kart üzerindeki ad ve soyad gerçek isim formatında olmalı.")
+
+    return {
+        "card_last4": card_number[-4:],
+        "expiry_date": f"{expiry_month:02d}/{str(expiry_year)[-2:]}",
+    }
+
+
+def _looks_like_cardholder_name(value: str) -> bool:
+    """Kart uzerindeki ad alanini test odemesi icin gercekci formatta tutar."""
+
+    name_parts = [part for part in value.split(" ") if part]
+    if len(name_parts) < 2:
+        return False
+
+    letter_pattern = re.compile(r"^[A-Za-zÇĞİÖŞÜçğıöşü'.-]+$")
+    vowel_pattern = re.compile(r"[AEIİOÖUÜaeıioöuü]")
+    return all(
+        len(part) >= 2 and letter_pattern.fullmatch(part) and vowel_pattern.search(part)
+        for part in name_parts
+    )
+
+
+def _find_installment(payment_plan: dict, installment_no: int) -> dict | None:
+    for installment in payment_plan.get("schedule", []):
+        if int(installment.get("installment_no", 0)) == int(installment_no):
+            return installment
+    return None
+
+
+def _wallet_transaction_id(prefix: str) -> str:
+    return f"WLT-{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+
+
+def _now_iso_seconds() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _model_to_dict(model: BaseModel) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_none=True)
+    return model.dict(exclude_none=True)
+
+
 def _ensure_payment_plan_access(payment_plan: dict, current_user: dict) -> None:
     """Odeme planinda rol ve sahiplik kontrolu yapar."""
 
@@ -1232,6 +1541,8 @@ def _attach_payment_plan_to_customer_profile(application_record: dict, payment_p
             payment_plan.get("principal", 0),
         ),
         "maturity_months": payment_plan.get("term_months", 0),
+        "monthly_interest_rate": payment_plan.get("monthly_interest_rate", 0),
+        "annual_interest_rate": payment_plan.get("annual_interest_rate", 0),
     }
     try:
         update_user_profile(owner_user_id, profile_updates, store_path=USER_STORE_PATH)
@@ -1296,10 +1607,24 @@ def _create_profile_payment_plan(current_user: dict) -> dict:
         "current_debt": principal,
         "term_months": term_months,
         "monthly_interest_rate": 0.025,
+        "annual_interest_rate": round(((1 + 0.025) ** 12) - 1, 4),
         "monthly_payment": monthly_payment,
         "total_payment": round(monthly_payment * term_months, 2),
         "total_interest": round((monthly_payment * term_months) - requested_amount, 2),
         "first_due_date": first_due_date.isoformat(),
+        "interest_policy": {
+            "min_monthly_interest_rate": 0.0185,
+            "max_monthly_interest_rate": 0.0425,
+            "assigned_monthly_interest_rate": 0.025,
+            "effective_monthly_interest_rate": 0.025,
+            "rate_source": "profile_fallback",
+        },
+        "credit_offer": {
+            "approved_amount": requested_amount,
+            "term_months": term_months,
+            "monthly_interest_rate": 0.025,
+            "source": "profile_fallback",
+        },
         "schedule": schedule,
         "payment_summary": {
             "paid_installment_count": 0,

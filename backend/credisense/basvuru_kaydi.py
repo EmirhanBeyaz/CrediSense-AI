@@ -112,12 +112,19 @@ def _risk_summary(analysis_result: dict) -> dict:
 
     risk = analysis_result.get("risk", {})
     bank_view = analysis_result.get("bank_view", {})
+    consistency = analysis_result.get("consistency", {})
+    form_document_consistency = analysis_result.get("form_document_consistency", {})
 
     return {
         "risk_score": risk.get("risk_score"),
         "risk_level": risk.get("risk_level", ""),
         "decision_source": risk.get("decision_source", ""),
         "recommended_action": bank_view.get("recommended_action", ""),
+        "main_reasons": risk.get("reasons", [])[:5],
+        "consistency_flags": consistency.get("flags", []),
+        "form_document_flags": form_document_consistency.get("flags", []),
+        "data_precedence_warnings": analysis_result.get("data_precedence_warnings", []),
+        "blockers": bank_view.get("blockers", []),
     }
 
 
