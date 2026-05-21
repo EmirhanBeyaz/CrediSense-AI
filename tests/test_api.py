@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -359,6 +360,39 @@ def test_document_upload_is_saved_for_customer(tmp_path, monkeypatch) -> None:
     list_response = client.get("/documents", headers=headers)
     assert list_response.status_code == 200
     assert list_response.json()["count"] == 1
+
+
+def test_document_file_uses_current_upload_folder_when_stored_path_was_moved(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("backend.credisense.api.USER_STORE_PATH", tmp_path / "users.db")
+    monkeypatch.setattr("backend.credisense.api.DOCUMENT_STORE_PATH", tmp_path / "documents.db")
+    monkeypatch.setattr("backend.credisense.api.DOCUMENT_FOLDER_PATH", tmp_path / "uploaded_documents")
+    client = TestClient(app)
+    headers = _login_headers(client, role="customer")
+
+    with SAMPLE_FILES[0].open("rb") as sample_file:
+        upload_response = client.post(
+            "/documents",
+            headers=headers,
+            files={"document": (SAMPLE_FILES[0].name, sample_file, "application/pdf")},
+            data={
+                "document_type": "identity",
+                "document_name": "Kimlik Belgesi",
+            },
+        )
+
+    assert upload_response.status_code == 200
+    payload = upload_response.json()
+    payload["stored_path"] = str(tmp_path / "old-project" / "missing.pdf")
+    with sqlite3.connect(api_module.DOCUMENT_STORE_PATH) as connection:
+        connection.execute(
+            "UPDATE documents SET payload = ? WHERE document_id = ?",
+            (json.dumps(payload, ensure_ascii=False), payload["document_id"]),
+        )
+
+    file_response = client.get(f"/documents/{payload['document_id']}/file", headers=headers)
+
+    assert file_response.status_code == 200
+    assert file_response.content.startswith(b"%PDF")
 
 
 def test_analyze_endpoint_with_sample_documents(tmp_path, monkeypatch) -> None:

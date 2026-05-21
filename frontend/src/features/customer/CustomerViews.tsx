@@ -47,6 +47,18 @@ const defaultForm: ApplicationForm = {
   existing_debt: "153.000 TL",
 };
 
+const editableFormFields = new Set<keyof ApplicationForm>(["requested_credit", "maturity_months"]);
+const formFieldOrder: Array<keyof ApplicationForm> = [
+  "full_name",
+  "test_id",
+  "birth_date",
+  "employer",
+  "declared_income",
+  "existing_debt",
+  "requested_credit",
+  "maturity_months",
+];
+
 const baseStages: AnalysisStage[] = [
   { id: "pdf", title: "PDF Okuma", description: "Yüklenen belgelerden metin çıkarılır.", status: "bekliyor" },
   { id: "understanding", title: "Belge Anlama", description: "Kimlik, gelir ve banka dökümü alanları ayrıştırılır.", status: "bekliyor" },
@@ -141,7 +153,13 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
     const uploaded = await uploadDocument(target, file);
     setApplicationDocuments((items) => items.map((document) => (document.id === documentId ? uploaded : document)));
     setSavedDocuments((items) => replaceDocumentInPackage(items, uploaded));
-    showToast(`${target.name} yüklendi.`);
+    const extractedFormFields = uploaded.extractedFields || {};
+    if (Object.keys(extractedFormFields).length) {
+      setForm((currentForm) => mergeExtractedFormFields(currentForm, extractedFormFields));
+      showToast(`${target.name} yüklendi, form bilgileri belgeden güncellendi.`);
+    } else {
+      showToast(`${target.name} yüklendi.`);
+    }
   }
 
   async function handleSavedDocumentUpload(documentId: string, file: File) {
@@ -224,10 +242,14 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
     }
   }
 
-  const displayResult = analysisResult || analysisResultFromApplication(latestApplication);
+  const applicationGroups = applicationGroupsWithApprovedCredit(customerApplications, paymentPlan, user);
+  const latestPendingApplication = applicationGroups.pending[0] || null;
+  const latestApprovedApplication = applicationGroups.approved[0] || null;
+  const focusedApplication = latestPendingApplication || latestApprovedApplication || latestApplication;
+  const displayResult = analysisResult || analysisResultFromApplication(focusedApplication);
 
   if (activeView === "customer-home") {
-    return <CustomerHome result={displayResult} documents={savedDocuments} latestApplication={latestApplication} paymentPlan={paymentPlan} onNavigate={onNavigate} />;
+    return <CustomerHome applications={customerApplications} documents={savedDocuments} result={displayResult} paymentPlan={paymentPlan} user={user} onNavigate={onNavigate} />;
   }
   if (activeView === "new-application") {
     return (
@@ -241,21 +263,21 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
         onKvkkChange={setKvkkAccepted}
         applicationReady={applicationReady}
         requiredDocumentsReady={requiredDocumentsReady}
-        latestApplication={latestApplication}
+        latestApplication={latestPendingApplication || latestApplication}
       />
     );
   }
   if (activeView === "documents") {
-    return <DocumentsView documents={savedDocuments} latestApplication={latestApplication} onUpload={handleSavedDocumentUpload} />;
+    return <DocumentsView documents={savedDocuments} latestApplication={latestPendingApplication || latestApplication} onUpload={handleSavedDocumentUpload} />;
   }
   if (activeView === "analysis-process") {
-    return <AnalysisProcess stages={stages} loading={analysisLoading} message={analysisMessage} onStartAnalysis={handleStartAnalysis} />;
+    return <AnalysisProcess applications={customerApplications} paymentPlan={paymentPlan} user={user} stages={stages} loading={analysisLoading} message={analysisMessage} onStartAnalysis={handleStartAnalysis} />;
   }
   if (activeView === "analysis-results") {
-    return <AnalysisResults result={displayResult} onNavigate={onNavigate} />;
+    return <AnalysisResults applications={customerApplications} paymentPlan={paymentPlan} user={user} result={displayResult} onNavigate={onNavigate} />;
   }
   if (activeView === "bank-approval") {
-    return <BankApproval latestApplication={latestApplication} paymentPlan={paymentPlan} result={displayResult} onNavigate={onNavigate} />;
+    return <BankApproval latestApplication={focusedApplication} paymentPlan={paymentPlan} result={displayResult} onNavigate={onNavigate} />;
   }
   if (activeView === "payment-plan") {
     return <PaymentPlanView paymentPlan={paymentPlan} />;
@@ -266,72 +288,81 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, showTo
   if (activeView === "customer-settings") {
     return <SettingsView onAccountDeleted={onAccountDeleted} user={user} />;
   }
-  return <ProfileView applications={customerApplications} user={user} />;
+  return <ProfileView applications={customerApplications} paymentPlan={paymentPlan} user={user} />;
 }
 
 function CustomerHome({
+  applications,
   result,
   documents,
-  latestApplication,
   paymentPlan,
+  user,
   onNavigate,
 }: {
+  applications: ApplicationRecord[];
   result: AnalysisResult | null;
   documents: UploadedDocument[];
-  latestApplication: ApplicationRecord | null;
   paymentPlan: PaymentPlan | null;
+  user: User;
   onNavigate: (view: CustomerView) => void;
 }) {
   const uploadedCount = documents.filter((document) => document.status === "yuklendi").length;
-  const hasApplication = Boolean(latestApplication);
+  const groups = applicationGroupsWithApprovedCredit(applications, paymentPlan, user);
+  const focusedApplication = groups.pending[0] || groups.approved[0] || null;
+  const hasApplication = groups.pending.length + groups.approved.length > 0;
+  const heroTitle = hasApplication ? "Mevcut başvuru" : "Aktif başvuru yok";
+
   return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
-      <Card className="min-h-[360px]">
-        <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Müşteri Portalı</p>
-        <h2 className="mt-3 font-display text-4xl font-bold">
-          {hasApplication ? "Başvuru durumunuz kontrol altında" : "Henüz aktif başvurunuz yok"}
-        </h2>
-        <p className="mt-4 max-w-2xl text-muted">
-          {hasApplication
-            ? "AI analizleri karar destek amacıyla çalışır. Nihai kredi kararı banka uzmanı ve banka onayı ile kesinleşir."
-            : "Kredi uygunluk skoru, banka onayı ve ödeme planı ancak PDF belgeleri yüklenip başvuru oluştuktan sonra gösterilir."}
-        </p>
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
-          <MetricCard label="Kredi Uygunluk Skoru" value={result ? result.eligibilityScore : "-"} hint={result ? "Müşteri görünümü" : "Analiz bekleniyor"} />
-          <MetricCard label="Başvuru Durumu" value={latestApplication?.status || "Başvuru yok"} tone={latestApplication ? "green" : "neutral"} />
-          <MetricCard label="Yüklenen Belge" value={`${uploadedCount}/${documents.length}`} tone="neutral" />
-        </div>
-        <ExtraDocumentNotice latestApplication={latestApplication} onNavigate={onNavigate} />
-        <div className="mt-8 flex flex-wrap gap-3">
-          <button className="gold-gradient rounded-lg px-5 py-3 font-bold text-black" onClick={() => onNavigate("new-application")} type="button">
-            Yeni başvuruya git
-          </button>
+    <div className="grid gap-5">
+      <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
+        <Card className="min-h-[360px]">
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Müşteri Portalı</p>
+          <h2 className="mt-3 font-display text-4xl font-bold">
+            {heroTitle}
+          </h2>
+          <div className="mt-8 grid gap-4 md:grid-cols-4">
+            <MetricCard label="Odak Skor" value={result ? result.eligibilityScore : "-"} hint={result ? focusedApplication?.application_id || "Son analiz" : "Analiz bekleniyor"} />
+            <MetricCard label="Onaylanan" value={groups.approved.length} tone="green" />
+            <MetricCard label="Onay Bekleyen" value={groups.pending.length} />
+            <MetricCard label="Yüklenen Belge" value={`${uploadedCount}/${documents.length}`} tone="neutral" />
+          </div>
+          <ExtraDocumentNotice latestApplication={groups.pending[0] || null} onNavigate={onNavigate} />
+          <div className="mt-8 flex flex-wrap gap-3">
+            <button className="gold-gradient rounded-lg px-5 py-3 font-bold text-black" onClick={() => onNavigate("new-application")} type="button">
+              Yeni başvuruya git
+            </button>
+            <button
+              className="rounded-lg border border-white/10 px-5 py-3 text-muted disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!result && !applications.length}
+              onClick={() => onNavigate("analysis-results")}
+              type="button"
+            >
+              Analiz panellerini görüntüle
+            </button>
+          </div>
+        </Card>
+        <Card>
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Ödeme Özeti</p>
+          <strong className="mt-4 block font-display text-3xl text-primary">{paymentPlan ? formatCurrency(paymentPlan.remaining_principal) : "-"}</strong>
+          <span className="mt-1 block text-sm text-muted">{paymentPlan ? "Kalan ana para" : "Onaylı ödeme planı yok"}</span>
+          <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/10">
+            <i className={`block h-full rounded-full bg-secondary ${paymentPlan ? "w-2/3" : "w-0"}`} />
+          </div>
           <button
-            className="rounded-lg border border-white/10 px-5 py-3 text-muted disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!result}
-            onClick={() => onNavigate("analysis-results")}
+            className="gold-gradient mt-8 w-full rounded-lg px-5 py-3 font-bold text-black disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!paymentPlan}
+            onClick={() => onNavigate("payment-plan")}
             type="button"
           >
-            Analiz sonucunu görüntüle
+            Ödeme planına git
           </button>
-        </div>
-      </Card>
-      <Card>
-        <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Ödeme Özeti</p>
-        <strong className="mt-4 block font-display text-3xl text-primary">{paymentPlan ? formatCurrency(paymentPlan.remaining_principal) : "-"}</strong>
-        <span className="mt-1 block text-sm text-muted">{paymentPlan ? "Kalan ana para" : "Onaylı ödeme planı yok"}</span>
-        <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/10">
-          <i className={`block h-full rounded-full bg-secondary ${paymentPlan ? "w-2/3" : "w-0"}`} />
-        </div>
-        <button
-          className="gold-gradient mt-8 w-full rounded-lg px-5 py-3 font-bold text-black disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={!paymentPlan}
-          onClick={() => onNavigate("payment-plan")}
-          type="button"
-        >
-          Ödeme planına git
-        </button>
-      </Card>
+        </Card>
+      </div>
+      <ApplicationGroupGrid
+        approved={groups.approved}
+        pending={groups.pending}
+        showReasons
+      />
     </div>
   );
 }
@@ -378,17 +409,28 @@ function NewApplication({
       <Card>
         <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Başvuru Formu</p>
         <h2 className="mt-2 font-display text-3xl font-bold">Finansal bilgiler</h2>
+        <p className="mt-2 text-sm text-muted">
+          Kimlik, gelir ve borç alanları yüklenen belgelerden alınır. Bu ekranda yalnızca kredi tutarı ve vade girilir.
+        </p>
         <div className="mt-5 grid gap-4 md:grid-cols-2">
-          {Object.entries(form).map(([key, value]) => (
-            <label className="grid gap-2 text-sm text-muted" key={key}>
-              {formLabel(key)}
-              <input
-                className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-white outline-none focus:border-primary/60"
-                value={value}
-                onChange={(event) => onFormChange({ ...form, [key]: event.target.value })}
-              />
-            </label>
-          ))}
+          {formFieldOrder.map((key) => {
+            const editable = editableFormFields.has(key);
+            return (
+              <label className="grid gap-2 text-sm text-muted" key={key}>
+                {formLabel(key)}
+                <input
+                  className={`rounded-lg border px-4 py-3 text-white outline-none ${
+                    editable
+                      ? "border-white/10 bg-black/30 focus:border-primary/60"
+                      : "border-white/10 bg-white/[0.04] text-muted"
+                  }`}
+                  readOnly={!editable}
+                  value={form[key]}
+                  onChange={(event) => onFormChange({ ...form, [key]: event.target.value })}
+                />
+              </label>
+            );
+          })}
         </div>
         <button
           className="gold-gradient mt-6 w-full rounded-lg px-5 py-3 font-bold text-black disabled:cursor-not-allowed disabled:opacity-60"
@@ -494,43 +536,72 @@ function DocumentsView({
 }
 
 function AnalysisProcess({
+  applications,
+  paymentPlan,
+  user,
   stages,
   loading,
   message,
   onStartAnalysis,
 }: {
+  applications: ApplicationRecord[];
+  paymentPlan: PaymentPlan | null;
+  user: User;
   stages: AnalysisStage[];
   loading: boolean;
   message: string;
   onStartAnalysis: () => void;
 }) {
+  const groups = applicationGroupsWithApprovedCredit(applications, paymentPlan, user);
+
   return (
-    <Card>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">AI Analiz Süreci</p>
-          <h2 className="mt-2 font-display text-3xl font-bold">Katmanlı analiz akışı</h2>
-          <p className="mt-2 text-sm text-muted">Status değerleri backend analiz akışından alınır; hata olursa analiz kaydedilmez.</p>
+    <div className="grid gap-5">
+      <Card>
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">AI Analiz Süreci</p>
+            <h2 className="mt-2 font-display text-3xl font-bold">Katmanlı analiz akışı</h2>
+            <p className="mt-2 text-sm text-muted">Status değerleri backend analiz akışından alınır; hata olursa analiz kaydedilmez.</p>
+          </div>
+          <button className="gold-gradient rounded-lg px-5 py-3 font-bold text-black disabled:opacity-60" disabled={loading} onClick={onStartAnalysis} type="button">
+            {loading ? "Analiz sürüyor" : "Analizi başlat"}
+          </button>
         </div>
-        <button className="gold-gradient rounded-lg px-5 py-3 font-bold text-black disabled:opacity-60" disabled={loading} onClick={onStartAnalysis} type="button">
-          {loading ? "Analiz sürüyor" : "Analizi başlat"}
-        </button>
-      </div>
-      {loading ? <LoadingState label="Belgeler katmanlı AI mimarisiyle işleniyor" /> : null}
-      {message ? (
-        <div className="mt-5 rounded-xl border border-primary/25 bg-primary/10 p-4 text-sm text-muted">
-          {message}
+        {loading ? <LoadingState label="Belgeler katmanlı AI mimarisiyle işleniyor" /> : null}
+        {message ? (
+          <div className="mt-5 rounded-xl border border-primary/25 bg-primary/10 p-4 text-sm text-muted">
+            {message}
+          </div>
+        ) : null}
+        <div className="mt-5">
+          <Stepper stages={stages} />
         </div>
-      ) : null}
-      <div className="mt-5">
-        <Stepper stages={stages} />
-      </div>
-    </Card>
+      </Card>
+      <ApplicationGroupGrid
+        approved={groups.approved}
+        pending={groups.pending}
+        showReasons
+      />
+    </div>
   );
 }
 
-function AnalysisResults({ result, onNavigate }: { result: AnalysisResult | null; onNavigate: (view: CustomerView) => void }) {
-  if (!result) {
+function AnalysisResults({
+  applications,
+  paymentPlan,
+  user,
+  result,
+  onNavigate,
+}: {
+  applications: ApplicationRecord[];
+  paymentPlan: PaymentPlan | null;
+  user: User;
+  result: AnalysisResult | null;
+  onNavigate: (view: CustomerView) => void;
+}) {
+  const groups = applicationGroupsWithApprovedCredit(applications, paymentPlan, user);
+
+  if (!result && !applications.length) {
     return (
       <Card>
         <EmptyState
@@ -545,32 +616,41 @@ function AnalysisResults({ result, onNavigate }: { result: AnalysisResult | null
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
-      <Card className="text-center">
-        <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Müşteri Görünümü</p>
-        <div className="mx-auto mt-8 grid h-44 w-44 place-items-center rounded-full border-[12px] border-primary/80 bg-primary/10 shadow-glow">
-          <strong className="font-display text-5xl text-primary">{result.eligibilityScore}</strong>
+    <div className="grid gap-5">
+      {result ? (
+        <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
+          <Card className="text-center">
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Müşteri Görünümü</p>
+            <div className="mx-auto mt-8 grid h-44 w-44 place-items-center rounded-full border-[12px] border-primary/80 bg-primary/10 shadow-glow">
+              <strong className="font-display text-5xl text-primary">{result.eligibilityScore}</strong>
+            </div>
+            <h2 className="mt-7 font-display text-3xl font-bold">Kredi uygunluk skoru</h2>
+            <p className="mt-3 text-sm text-muted">Bu skor seçili analiz içindir. Diğer başvurular aşağıda ayrı tutulur.</p>
+          </Card>
+          <Card>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Analiz Sonuçlarım</p>
+            <h2 className="mt-2 font-display text-3xl font-bold">Açıklanabilir karar destek özeti</h2>
+            <div className="mt-6 grid gap-4 md:grid-cols-3">
+              <MetricCard label="Belge Güven Skoru" value={scorePercent(result.documentConfidenceScore)} tone="green" />
+              <MetricCard label="Tutarlılık Skoru" value={scorePercent(result.consistencyScore)} />
+              <MetricCard label="Anomali Skoru" value={scorePercent(result.anomalyScore)} tone="red" />
+            </div>
+            <p className="mt-6 rounded-xl border border-white/10 bg-black/25 p-4 text-muted">{result.summary}</p>
+            <ul className="mt-5 grid gap-3">
+              {result.reasons.map((reason) => (
+                <li className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm text-muted" key={reason}>
+                  {reason}
+                </li>
+              ))}
+            </ul>
+          </Card>
         </div>
-        <h2 className="mt-7 font-display text-3xl font-bold">Kredi uygunluk skoru</h2>
-        <p className="mt-3 text-sm text-muted">Bu skor nihai karar değildir. Banka onayı ayrı süreçtir.</p>
-      </Card>
-      <Card>
-        <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Analiz Sonuçlarım</p>
-        <h2 className="mt-2 font-display text-3xl font-bold">Açıklanabilir karar destek özeti</h2>
-        <div className="mt-6 grid gap-4 md:grid-cols-3">
-          <MetricCard label="Belge Güven Skoru" value={scorePercent(result.documentConfidenceScore)} tone="green" />
-          <MetricCard label="Tutarlılık Skoru" value={scorePercent(result.consistencyScore)} />
-          <MetricCard label="Anomali Skoru" value={scorePercent(result.anomalyScore)} tone="red" />
-        </div>
-        <p className="mt-6 rounded-xl border border-white/10 bg-black/25 p-4 text-muted">{result.summary}</p>
-        <ul className="mt-5 grid gap-3">
-          {result.reasons.map((reason) => (
-            <li className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm text-muted" key={reason}>
-              {reason}
-            </li>
-          ))}
-        </ul>
-      </Card>
+      ) : null}
+      <ApplicationGroupGrid
+        approved={groups.approved}
+        pending={groups.pending}
+        showReasons
+      />
     </div>
   );
 }
@@ -645,8 +725,8 @@ function PaymentPlanView({ paymentPlan }: { paymentPlan: PaymentPlan | null }) {
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
-      <Card>
+    <Card>
+      <div className="grid gap-5">
         <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Ödeme Planım</p>
         <h2 className="mt-2 font-display text-4xl font-bold text-primary">{formatCurrency(paymentPlan.approved_amount)}</h2>
         <div className="mt-6 grid gap-4 md:grid-cols-3">
@@ -654,26 +734,27 @@ function PaymentPlanView({ paymentPlan }: { paymentPlan: PaymentPlan | null }) {
           <MetricCard label="Vade" value={`${paymentPlan.maturity_months} Ay`} tone="neutral" />
           <MetricCard label="Kalan Ana Para" value={formatCurrency(paymentPlan.remaining_principal)} />
         </div>
-        <div className="mt-8">
+
+        <div className="mt-3 grid gap-5 xl:grid-cols-[1fr_420px] xl:items-stretch">
           <ChartCard />
-        </div>
-      </Card>
-      <Card>
-        <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Taksitler</p>
-        <h2 className="mt-2 font-display text-2xl font-bold">Yaklaşan ödemeler</h2>
-        <div className="mt-5 grid gap-3">
-          {paymentPlan.installments.map((installment) => (
-            <div className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-lg border border-white/10 bg-black/25 p-4" key={installment.installment_no}>
-              <strong>Taksit {installment.installment_no}</strong>
-              <span>{formatCurrency(installment.amount)}</span>
-              <StatusBadge tone={installment.status === "Ödendi" ? "green" : installment.status === "Gecikmiş" ? "red" : "gold"}>
-                {installment.status}
-              </StatusBadge>
+          <section className="flex max-h-[312px] min-h-[312px] flex-col rounded-xl border border-white/10 bg-black/25 p-4">
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Taksitler</p>
+            <h3 className="mt-2 font-display text-2xl font-bold">Yaklaşan ödemeler</h3>
+            <div className="mt-5 grid gap-3 overflow-y-auto pr-2">
+              {paymentPlan.installments.map((installment) => (
+                <div className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-lg border border-white/10 bg-black/25 p-4" key={installment.installment_no}>
+                  <strong>Taksit {installment.installment_no}</strong>
+                  <span>{formatCurrency(installment.amount)}</span>
+                  <StatusBadge tone={installment.status === "Ödendi" ? "green" : installment.status === "Gecikmiş" ? "red" : "gold"}>
+                    {installment.status}
+                  </StatusBadge>
+                </div>
+              ))}
             </div>
-          ))}
+          </section>
         </div>
-      </Card>
-    </div>
+      </div>
+    </Card>
   );
 }
 
@@ -854,58 +935,189 @@ function formatDisplayDate(value: string): string {
   }).format(date);
 }
 
-function ProfileView({ applications, user }: { applications: ApplicationRecord[]; user: User }) {
+function ProfileView({
+  applications,
+  paymentPlan,
+  user,
+}: {
+  applications: ApplicationRecord[];
+  paymentPlan: PaymentPlan | null;
+  user: User;
+}) {
+  const groups = applicationGroupsWithApprovedCredit(applications, paymentPlan, user);
+
+  return (
+    <div className="grid gap-5">
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-5">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Profil</p>
+            <h2 className="mt-2 font-display text-3xl font-bold">{user.fullName}</h2>
+            <p className="mt-2 text-muted">{user.email}</p>
+          </div>
+          <StatusBadge tone={user.emailVerified ? "green" : "gold"}>
+            {user.emailVerified ? "E-posta doğrulandı" : "Doğrulama bekliyor"}
+          </StatusBadge>
+        </div>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-4">
+          <MetricCard label="Kullanıcı adı" value={user.username || "-"} tone="neutral" />
+          <MetricCard label="Rol" value="Müşteri" tone="neutral" />
+          <MetricCard label="Onaylanan" value={groups.approved.length} tone="green" />
+          <MetricCard label="Onay Bekleyen" value={groups.pending.length} />
+        </div>
+
+        <div className="mt-6 grid gap-3 rounded-xl border border-white/10 bg-black/25 p-4 text-sm text-muted md:grid-cols-2">
+          <DetailLine label="Aktif kredi" value={paymentPlan?.loan_id || String(user.profile?.active_loan_id || "-")} />
+          <DetailLine label="Aktif başvuru" value={String(user.profile?.active_application_id || "-")} />
+        </div>
+      </Card>
+      <ApplicationGroupGrid
+        approved={groups.approved}
+        pending={groups.pending}
+        showReasons
+      />
+    </div>
+  );
+}
+
+function ApplicationGroupGrid({
+  approved,
+  pending,
+  showReasons = false,
+}: {
+  approved: ApplicationRecord[];
+  pending: ApplicationRecord[];
+  showReasons?: boolean;
+}) {
+  return (
+    <div className="grid gap-5 xl:grid-cols-2">
+      <ApplicationListPanel
+        applications={pending}
+        description="Uzman kararı, ek belge veya banka onayı bekleyen başvurular."
+        emptyDescription="Yeni analiz oluşturulduğunda banka onayı bekleyen kayıt burada görünür."
+        emptyTitle="Onay bekleyen başvuru yok"
+        showReasons={showReasons}
+        title="Onay bekleyenler"
+        tone="gold"
+      />
+      <ApplicationListPanel
+        applications={approved}
+        description="Banka onayı tamamlanan ve ödeme planına dönüşebilen başvurular."
+        emptyDescription="Banka uzmanı başvuruyu onayladığında burada ayrı tutulur."
+        emptyTitle="Onaylanan başvuru yok"
+        showReasons={showReasons}
+        title="Onaylananlar"
+        tone="green"
+      />
+    </div>
+  );
+}
+
+function ApplicationListPanel({
+  applications,
+  description,
+  emptyDescription,
+  emptyTitle,
+  showReasons,
+  title,
+  tone,
+}: {
+  applications: ApplicationRecord[];
+  description: string;
+  emptyDescription: string;
+  emptyTitle: string;
+  showReasons: boolean;
+  title: string;
+  tone: "gold" | "green";
+}) {
   return (
     <Card>
-      <div className="flex flex-wrap items-start justify-between gap-5">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Profil</p>
-          <h2 className="mt-2 font-display text-3xl font-bold">{user.fullName}</h2>
-          <p className="mt-2 text-muted">{user.email}</p>
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Başvuru Paneli</p>
+          <h3 className="mt-2 font-display text-2xl font-bold">{title}</h3>
+          <p className="mt-1 text-sm text-muted">{description}</p>
         </div>
-        <StatusBadge tone={user.emailVerified ? "green" : "gold"}>
-          {user.emailVerified ? "E-posta doğrulandı" : "Doğrulama bekliyor"}
-        </StatusBadge>
+        <StatusBadge tone={tone}>{`${applications.length} başvuru`}</StatusBadge>
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-3">
-        <MetricCard label="Kullanıcı adı" value={user.username || "-"} tone="neutral" />
-        <MetricCard label="Rol" value="Müşteri" tone="neutral" />
-        <MetricCard label="Aktif kredi" value={String(user.profile?.active_loan_id || "-")} tone="neutral" />
-      </div>
-
-      <div className="mt-8 rounded-xl border border-white/10 bg-black/20 p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="font-display text-xl font-bold">Gecmis basvurular</h3>
-            <p className="mt-1 text-sm text-muted">Bu hesapla olusturulan eski kredi basvuru paketleri.</p>
-          </div>
-          <StatusBadge tone="gold">{`${applications.length} basvuru`}</StatusBadge>
+      {applications.length ? (
+        <div className="grid gap-3">
+          {applications.map((application) => (
+            <CustomerApplicationCard application={application} key={application.application_id} showReasons={showReasons} />
+          ))}
         </div>
-
-        {applications.length ? (
-          <div className="grid gap-3">
-            {applications.map((application) => (
-              <article className="grid gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-4 md:grid-cols-[1fr_auto_auto]" key={application.application_id}>
-                <div>
-                  <strong className="block">{application.application_id}</strong>
-                  <small className="text-muted">{application.created_at || "Tarih bilgisi yok"}</small>
-                </div>
-                <StatusBadge tone={application.risk_level === "Yuksek" || application.risk_level === "Yüksek" ? "red" : application.risk_level === "Dusuk" || application.risk_level === "Düşük" ? "green" : "gold"}>
-                  {application.risk_level || "Risk bekleniyor"}
-                </StatusBadge>
-                <span className="text-sm text-muted">{application.status}</span>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <EmptyState
-            title="Gecmis basvuru yok"
-            description="Yeni basvuru tamamlandiginda bu bolumde ayri bir kayit olarak gorunur."
-          />
-        )}
-      </div>
+      ) : (
+        <EmptyState title={emptyTitle} description={emptyDescription} />
+      )}
     </Card>
+  );
+}
+
+function CustomerApplicationCard({
+  application,
+  showReasons,
+}: {
+  application: ApplicationRecord;
+  showReasons: boolean;
+}) {
+  const reasons = applicationRiskReasons(application).slice(0, 4);
+
+  return (
+    <article className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+      <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-start">
+        <div>
+          <strong className="block">{application.application_id}</strong>
+          <small className="text-muted">{application.created_at ? formatDisplayDate(application.created_at) : "Tarih bilgisi yok"}</small>
+        </div>
+        <StatusBadge tone={applicationRiskTone(application)}>{application.risk_level || "Risk bekleniyor"}</StatusBadge>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <CompactMetric label="Risk Skoru" value={applicationRiskScoreText(application)} tone={applicationRiskTone(application)} />
+        <CompactMetric label="Durum" value={application.status || "Durum bekleniyor"} />
+        <CompactMetric label="Talep" value={applicationAmountText(application)} />
+      </div>
+
+      {showReasons && reasons.length ? (
+        <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3">
+          <strong className="text-sm">Skor gerekçeleri</strong>
+          <ul className="mt-2 grid gap-2 text-sm text-muted">
+            {reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function CompactMetric({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  tone?: "gold" | "green" | "red" | "neutral";
+}) {
+  const toneClass = tone === "red" ? "text-danger" : tone === "green" ? "text-secondary" : tone === "gold" ? "text-primary" : "text-white";
+  return (
+    <div className="min-w-0 rounded-lg border border-white/10 bg-black/25 p-3">
+      <span className="block text-xs uppercase tracking-[0.12em] text-muted">{label}</span>
+      <strong className={`mt-1 block truncate ${toneClass}`}>{value}</strong>
+    </div>
+  );
+}
+
+function DetailLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span className="block text-xs uppercase tracking-[0.12em] text-muted">{label}</span>
+      <strong className="mt-1 block text-white">{value}</strong>
+    </div>
   );
 }
 
@@ -1069,6 +1281,173 @@ function buildDefaultForm(user: User): ApplicationForm {
   };
 }
 
+function mergeExtractedFormFields(form: ApplicationForm, extractedFields: Partial<ApplicationForm>): ApplicationForm {
+  const nextForm = { ...form };
+  (Object.entries(extractedFields) as Array<[keyof ApplicationForm, string | undefined]>).forEach(([key, value]) => {
+    if (editableFormFields.has(key)) {
+      return;
+    }
+    const cleanValue = String(value || "").trim();
+    if (cleanValue) {
+      nextForm[key] = cleanValue;
+    }
+  });
+  return nextForm;
+}
+
+function applicationGroupsWithApprovedCredit(
+  applications: ApplicationRecord[],
+  paymentPlan: PaymentPlan | null,
+  user: User,
+) {
+  const groups = splitApplicationsByApproval(applications);
+  const approvedCredit = approvedCreditApplicationRecord(paymentPlan, user);
+
+  if (approvedCredit && !hasMatchingApprovedCredit(groups.approved, approvedCredit)) {
+    groups.approved.unshift(approvedCredit);
+  }
+
+  return groups;
+}
+
+function approvedCreditApplicationRecord(paymentPlan: PaymentPlan | null, user: User): ApplicationRecord | null {
+  const profile = user.profile || {};
+  const activeLoanId = paymentPlan?.loan_id || String(profile.active_loan_id || "");
+  const activeApplicationId = String(profile.active_application_id || "");
+
+  if (!activeLoanId && !activeApplicationId) {
+    return null;
+  }
+
+  const requestedAmount = firstFiniteNumber(
+    paymentPlan?.approved_amount,
+    parseCurrencyValue(profile.requested_credit),
+    parseCurrencyValue(profile.current_debt),
+  );
+  const remainingPrincipal = firstFiniteNumber(
+    paymentPlan?.remaining_principal,
+    parseCurrencyValue(profile.current_debt),
+  );
+  const termMonths = paymentPlan?.maturity_months ?? profile.maturity_months;
+
+  return {
+    application_id: activeApplicationId || activeLoanId,
+    customer_name: user.fullName,
+    status: paymentPlan ? "Kredi onaylandı, ödeme planı aktif" : "Kredi onaylandı",
+    status_code: "APPROVED",
+    risk_score: 29,
+    risk_level: "Düşük",
+    review_route: "completed",
+    review_route_text: "Onaylanan kredi",
+    system_action: paymentPlan
+      ? "Banka onayı tamamlandı ve ödeme planı oluşturuldu."
+      : "Banka onayı tamamlandı. Ödeme planı bilgisi bekleniyor.",
+    ai_recommendation: "Onaylı kredi kaydı müşteri profilinden alındı.",
+    credit_request: {
+      requested_amount: Number.isFinite(requestedAmount) ? requestedAmount : undefined,
+      term_months: termMonths ? String(termMonths) : undefined,
+      current_total_debt: Number.isFinite(remainingPrincipal) ? remainingPrincipal : undefined,
+    },
+    reasons: [
+      "Banka onayı tamamlandığı için bu kayıt onaylananlar panelinde tutulur.",
+      paymentPlan
+        ? `Aktif ödeme planı: ${activeLoanId}.`
+        : `Aktif kredi: ${activeLoanId || activeApplicationId}.`,
+    ],
+    raw: {
+      source: "active_credit_profile",
+      active_loan_id: activeLoanId,
+      active_application_id: activeApplicationId,
+      payment_plan_available: Boolean(paymentPlan),
+    },
+  };
+}
+
+function hasMatchingApprovedCredit(applications: ApplicationRecord[], approvedCredit: ApplicationRecord) {
+  const raw = approvedCredit.raw as any;
+  const activeLoanId = String(raw?.active_loan_id || "");
+  const activeApplicationId = String(raw?.active_application_id || approvedCredit.application_id || "");
+
+  return applications.some((application) => {
+    const applicationRaw = application.raw as any;
+    const applicationLoanId = String(applicationRaw?.loan_id || applicationRaw?.active_loan_id || "");
+    return (
+      application.application_id === activeApplicationId
+      || (Boolean(activeLoanId) && applicationLoanId === activeLoanId)
+    );
+  });
+}
+
+function splitApplicationsByApproval(applications: ApplicationRecord[]) {
+  return applications.reduce(
+    (groups, application) => {
+      if (isApprovedApplication(application)) {
+        groups.approved.push(application);
+      } else {
+        groups.pending.push(application);
+      }
+      return groups;
+    },
+    { approved: [] as ApplicationRecord[], pending: [] as ApplicationRecord[] },
+  );
+}
+
+function isApprovedApplication(application: ApplicationRecord) {
+  const raw = application.raw as any;
+  const statusCode = String(application.status_code || raw?.current_status?.status_code || "").toUpperCase();
+  const decisionType = String(raw?.bank_decision?.decision_type || raw?.expert_decision?.decision_type || "").toLowerCase();
+  const statusText = normalizeTurkishText(application.status || raw?.current_status?.status_text || "");
+
+  return statusCode === "APPROVED" || decisionType === "approve" || statusText.includes("onaylandi");
+}
+
+function applicationRiskReasons(application: ApplicationRecord) {
+  const raw = application.raw as any;
+  const values = [
+    ...(application.reasons || []),
+    ...(raw?.bank_view?.main_reasons || []),
+    ...(raw?.risk?.reasons || []),
+    ...(raw?.form_document_consistency?.flags || []),
+    ...(raw?.consistency?.flags || []),
+    application.system_action || "",
+  ];
+  const uniqueReasons = Array.from(new Set(values.map((item) => String(item).trim()).filter(Boolean)));
+
+  if (uniqueReasons.length) {
+    return uniqueReasons;
+  }
+  if (application.risk_level === "Yüksek" || application.risk_level === "Yuksek") {
+    return ["Risk seviyesi yüksek olduğu için detaylı banka uzmanı incelemesi gerekir."];
+  }
+  if (application.risk_level === "Düşük" || application.risk_level === "Dusuk") {
+    return ["Belge ve gelir göstergeleri düşük risk seviyesinde değerlendirildi."];
+  }
+  return ["Başvuru kaydı backend üzerinden yüklendi.", "Nihai karar banka uzmanı ve banka onayı ile takip edilir."];
+}
+
+function applicationRiskTone(application: ApplicationRecord): "gold" | "green" | "red" | "neutral" {
+  if (application.risk_level === "Yüksek" || application.risk_level === "Yuksek") return "red";
+  if (application.risk_level === "Düşük" || application.risk_level === "Dusuk") return "green";
+  return "gold";
+}
+
+function applicationRiskScoreText(application: ApplicationRecord) {
+  const value = Number(application.risk_score || 0);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "-";
+  }
+  return value <= 1 ? scorePercent(value) : `%${Math.round(value)}`;
+}
+
+function applicationAmountText(application: ApplicationRecord) {
+  const amount = parseCurrencyValue(application.credit_request?.requested_amount);
+  if (Number.isFinite(amount) && amount > 0) {
+    return formatCurrency(amount);
+  }
+  const rawAmount = application.credit_request?.requested_amount;
+  return rawAmount ? String(rawAmount) : "-";
+}
+
 function analysisResultFromApplication(application: ApplicationRecord | null): AnalysisResult | null {
   if (!application) {
     return null;
@@ -1076,10 +1455,7 @@ function analysisResultFromApplication(application: ApplicationRecord | null): A
 
   const riskScore = Number(application.risk_score || 0);
   const eligibilityScore = riskScore ? Math.max(0, Math.min(100, 100 - riskScore)) : 0;
-  const reasons = application.reasons?.length ? application.reasons : [
-    application.system_action || "Başvuru kaydı backend üzerinden yüklendi.",
-    "Nihai karar banka uzmanı ve banka onayı ile takip edilir.",
-  ];
+  const reasons = applicationRiskReasons(application);
 
   return {
     applicationId: application.application_id,
@@ -1094,6 +1470,46 @@ function analysisResultFromApplication(application: ApplicationRecord | null): A
     reasons,
     raw: application.raw,
   };
+}
+
+function parseCurrencyValue(value: unknown) {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return Number.NaN;
+  }
+
+  let text = value.replace(/[^0-9,.\-]/g, "");
+  if (!text) {
+    return Number.NaN;
+  }
+  if (text.includes(",") && text.includes(".")) {
+    text = text.replace(/\./g, "").replace(",", ".");
+  } else if (text.includes(",")) {
+    text = text.replace(/\./g, "").replace(",", ".");
+  } else if (text.includes(".")) {
+    const parts = text.split(".");
+    if (parts.length > 1 && parts.slice(1).every((part) => part.length === 3)) {
+      text = parts.join("");
+    }
+  }
+  return Number(text);
+}
+
+function firstFiniteNumber(...values: Array<number | undefined>) {
+  return values.find((value) => Number.isFinite(value)) ?? Number.NaN;
+}
+
+function normalizeTurkishText(value: string) {
+  return value
+    .replace(/[Çç]/g, "c")
+    .replace(/[Ğğ]/g, "g")
+    .replace(/[İIı]/g, "i")
+    .replace(/[Öö]/g, "o")
+    .replace(/[Şş]/g, "s")
+    .replace(/[Üü]/g, "u")
+    .toLowerCase();
 }
 
 async function runAnalysisWithVisibleStages(

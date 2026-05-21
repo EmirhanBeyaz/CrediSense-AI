@@ -15,6 +15,8 @@ export const endpoints = {
   analyze: "/analyze",
   applications: "/applications",
   applicationDetail: (applicationId: string) => `/applications/${applicationId}`,
+  applicationDocuments: (applicationId: string) => `/applications/${applicationId}/documents`,
+  documentFile: (documentId: string) => `/documents/${documentId}/file`,
   decision: (applicationId: string) => `/applications/${applicationId}/decision`,
   expertReport: (applicationId: string) => `/applications/${applicationId}/expert-report`,
   paymentPlanForApplication: (applicationId: string) => `/applications/${applicationId}/payment-plan`,

@@ -93,7 +93,7 @@ def _application_status(status_code: str) -> dict:
     return {
         "status_code": status_code,
         "status_text": status_texts.get(status_code, "Bilinmeyen durum"),
-        "is_final": status_code in {"PRE_APPROVED", "DEEP_REVIEW"},
+        "is_final": status_code == "PRE_APPROVED",
         "requires_human_review": status_code in {"MANUAL_REVIEW", "DEEP_REVIEW"},
         "next_action": _next_action(status_code),
     }

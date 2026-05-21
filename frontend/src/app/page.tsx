@@ -85,7 +85,7 @@ const expertTitles: Record<ExpertView, { title: string; subtitle: string }> = {
   },
   "decision-process": {
     title: "Karar Süreci",
-    subtitle: "Onay, revize, ek belge ve ret aksiyonlarını backend’e gönderin.",
+    subtitle: "",
   },
   reports: {
     title: "Raporlar",
@@ -327,7 +327,7 @@ export default function Home() {
         user={user}
       >
         {role === "expert" ? (
-          <ExpertViews activeView={activeView as ExpertView} showToast={showToast} />
+          <ExpertViews activeView={activeView as ExpertView} showToast={showToast} user={user} />
         ) : (
           <CustomerViews
             activeView={activeView as CustomerView}

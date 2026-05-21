@@ -11,27 +11,36 @@ import { formatCurrency, scorePercent } from "@/lib/format";
 import {
   approveApplication,
   createExpertReport,
+  getApplicationDocumentBlobUrl,
+  getApplicationDocuments,
   getExpertApplications,
   rejectApplication,
   requestExtraDocument,
   reviseApplication,
 } from "@/services/expertService";
 import { getReports } from "@/services/reportService";
-import type { ApplicationRecord, ExpertView, ReportSummary } from "@/types";
+import type { ApplicationDocument, ApplicationRecord, ExpertView, ReportSummary, User } from "@/types";
 
 type ExpertViewsProps = {
   activeView: ExpertView;
   showToast: (message: string) => void;
+  user: User;
 };
 
 type ExpertDecision = "approve" | "revise" | "extra" | "reject";
 
-export function ExpertViews({ activeView, showToast }: ExpertViewsProps) {
+const extraDocumentOptions = [
+  "Güncel gelir belgesi",
+  "Son 6 aylık hesap dökümü",
+];
+
+export function ExpertViews({ activeView, showToast, user }: ExpertViewsProps) {
   const [applications, setApplications] = useState<ApplicationRecord[]>(demoApplications);
   const [selectedId, setSelectedId] = useState(demoApplications[0].application_id);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [reports, setReports] = useState<ReportSummary[]>([]);
+  const [selectedDocuments, setSelectedDocuments] = useState<ApplicationDocument[]>([]);
   const [decisionNote, setDecisionNote] = useState("");
   const [extraDocumentText, setExtraDocumentText] = useState("Güncel gelir belgesi");
   const [reportText, setReportText] = useState("");
@@ -45,6 +54,30 @@ export function ExpertViews({ activeView, showToast }: ExpertViewsProps) {
     [applications, selectedId],
   );
   const manualApplications = useMemo(() => applications.filter(isManualReview), [applications]);
+
+  useEffect(() => {
+    if (!selected?.application_id) {
+      setSelectedDocuments([]);
+      return;
+    }
+
+    let cancelled = false;
+    getApplicationDocuments(selected.application_id)
+      .then((documents) => {
+        if (!cancelled) {
+          setSelectedDocuments(documents);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSelectedDocuments(selected.documents || []);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.application_id, selected?.documents]);
 
   async function refreshExpertData() {
     setLoading(true);
@@ -161,7 +194,7 @@ export function ExpertViews({ activeView, showToast }: ExpertViewsProps) {
     );
   }
   if (activeView === "document-control") {
-    return <DocumentControl selected={selected} />;
+    return <DocumentControl documents={selectedDocuments} selected={selected} showToast={showToast} />;
   }
   if (activeView === "risk-analysis") {
     return <RiskAnalysis selected={selected} />;
@@ -180,9 +213,9 @@ export function ExpertViews({ activeView, showToast }: ExpertViewsProps) {
     );
   }
   if (activeView === "reports") {
-    return <ReportsView reports={reports} />;
+    return <ReportsView applications={applications} reports={reports} />;
   }
-  return <ProfileView />;
+  return <ProfileView applications={applications} reports={reports} user={user} />;
 }
 
 function ExpertHome({ applications }: { applications: ApplicationRecord[] }) {
@@ -467,7 +500,68 @@ function ApplicationDetail({
   );
 }
 
-function DocumentControl({ selected }: { selected: ApplicationRecord }) {
+function DocumentControl({
+  selected,
+  documents,
+  showToast,
+}: {
+  selected: ApplicationRecord;
+  documents: ApplicationDocument[];
+  showToast: (message: string) => void;
+}) {
+  const [activeDocumentId, setActiveDocumentId] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  useEffect(() => {
+    setActiveDocumentId((currentId) => {
+      if (documents.some((document) => document.document_id === currentId)) {
+        return currentId;
+      }
+      return documents[0]?.document_id || "";
+    });
+  }, [documents]);
+
+  useEffect(() => {
+    if (!activeDocumentId) {
+      setPreviewUrl("");
+      return;
+    }
+
+    let cancelled = false;
+    let objectUrl = "";
+    setPreviewLoading(true);
+    getApplicationDocumentBlobUrl(activeDocumentId)
+      .then((url) => {
+        objectUrl = url;
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+        } else {
+          setPreviewUrl(url);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPreviewUrl("");
+          showToast(error instanceof Error ? error.message : "Belge görüntülenemedi.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPreviewLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [activeDocumentId, showToast]);
+
+  const activeDocument = documents.find((document) => document.document_id === activeDocumentId) || documents[0];
+
   return (
     <div className="grid gap-5 xl:grid-cols-3">
       <Card>
@@ -482,13 +576,44 @@ function DocumentControl({ selected }: { selected: ApplicationRecord }) {
       <Card className="xl:col-span-3">
         <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Belge Kontrolü</p>
         <h2 className="mt-2 font-display text-3xl font-bold">{selected.customer_name}</h2>
-        <div className="mt-6 grid gap-3 md:grid-cols-3">
-          {["Kimlik belgesi doğrulandı", "Gelir belgesi okunabilir", "Banka dökümü analiz edildi"].map((text) => (
-            <div className="rounded-xl border border-secondary/20 bg-secondary/10 p-4 text-sm text-muted" key={text}>
-              <span className="material-symbols-outlined mb-3 text-secondary">task_alt</span>
-              <strong className="block text-white">{text}</strong>
-            </div>
-          ))}
+        <div className="mt-6 grid gap-4 lg:grid-cols-[320px_1fr]">
+          <div className="grid content-start gap-3">
+            {documents.length ? documents.map((document) => (
+              <button
+                className={`rounded-xl border p-4 text-left transition ${
+                  activeDocumentId === document.document_id ? "border-primary/50 bg-primary/10" : "border-white/10 bg-black/25 hover:border-primary/30"
+                }`}
+                key={document.document_id}
+                onClick={() => setActiveDocumentId(document.document_id)}
+                type="button"
+              >
+                <span className="material-symbols-outlined mb-3 text-primary">description</span>
+                <strong className="block">{document.document_name || documentLabel(document.document_type)}</strong>
+                <small className="mt-1 block text-muted">{document.original_file_name || document.document_id}</small>
+                <StatusBadge tone="green">{document.status || "Yüklendi"}</StatusBadge>
+              </button>
+            )) : (
+              <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+                <EmptyState title="Belge bulunamadı" description="Bu başvuruya bağlı yüklenen PDF kaydı henüz yok." />
+              </div>
+            )}
+          </div>
+
+          <div className="min-h-[520px] rounded-xl border border-white/10 bg-black/25 p-3">
+            {previewLoading ? (
+              <LoadingState label="Belge görüntüleniyor" />
+            ) : previewUrl && activeDocument ? (
+              <iframe
+                className="h-[520px] w-full rounded-lg border-0 bg-white"
+                src={previewUrl}
+                title={activeDocument.document_name || activeDocument.original_file_name || "Başvuru belgesi"}
+              />
+            ) : (
+              <div className="grid h-[520px] place-items-center">
+                <EmptyState title="Önizleme bekleniyor" description="Listeden bir PDF seçildiğinde burada görüntülenir." />
+              </div>
+            )}
+          </div>
         </div>
       </Card>
     </div>
@@ -545,9 +670,6 @@ function DecisionProcess({
     <Card>
       <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Karar Süreci</p>
       <h2 className="mt-2 font-display text-3xl font-bold">{selected.customer_name}</h2>
-      <p className="mt-3 max-w-3xl text-muted">
-        Bu ekrandaki aksiyonlar doğrudan backend başvuru kaydına işlenir. Ek belge istenirse müşteri hesabında ilgili başvuru için yükleme aksiyonu açılır.
-      </p>
       <DecisionControls
         decisionNote={decisionNote}
         extraDocumentText={extraDocumentText}
@@ -579,6 +701,19 @@ function DecisionControls({
   onExtraDocumentTextChange: (value: string) => void;
 }) {
   const finalStatus = isDecisionFinal(selected);
+  const requestedDocuments = parseRequestedDocuments(extraDocumentText);
+
+  function handleRequestedDocumentToggle(documentName: string) {
+    const nextDocuments = requestedDocuments.includes(documentName)
+      ? requestedDocuments.filter((item) => item !== documentName)
+      : [...requestedDocuments, documentName];
+
+    if (!nextDocuments.length) {
+      return;
+    }
+
+    onExtraDocumentTextChange(nextDocuments.join(", "));
+  }
 
   return (
     <div className="mt-6 grid gap-4">
@@ -591,15 +726,32 @@ function DecisionControls({
           value={decisionNote}
         />
       </label>
-      <label className="grid gap-2 text-sm text-muted">
-        Ek belge adları
-        <input
-          className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-white outline-none focus:border-primary/60"
-          onChange={(event) => onExtraDocumentTextChange(event.target.value)}
-          placeholder="Güncel gelir belgesi, ek banka dökümü"
-          value={extraDocumentText}
-        />
-      </label>
+      <fieldset className="grid gap-3">
+        <legend className="text-sm text-muted">Ek belge adları</legend>
+        <div className="grid gap-3 md:grid-cols-2">
+          {extraDocumentOptions.map((documentName) => {
+            const selectedDocument = requestedDocuments.includes(documentName);
+            return (
+              <label
+                className={`flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border px-4 py-3 text-sm font-semibold transition ${
+                  selectedDocument
+                    ? "border-primary/60 bg-primary/10 text-primary"
+                    : "border-white/10 bg-black/30 text-muted hover:border-primary/40 hover:text-white"
+                }`}
+                key={documentName}
+              >
+                <input
+                  checked={selectedDocument}
+                  className="h-4 w-4 accent-yellow-400"
+                  onChange={() => handleRequestedDocumentToggle(documentName)}
+                  type="checkbox"
+                />
+                <span>{documentName}</span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
       <div className="grid gap-4 md:grid-cols-4">
         <button className="gold-gradient rounded-lg px-5 py-4 font-bold text-black disabled:opacity-60" disabled={loading || finalStatus} onClick={() => onDecision("approve")} type="button">
           Onayla
@@ -624,39 +776,202 @@ function DecisionControls({
   );
 }
 
-function ReportsView({ reports }: { reports: ReportSummary[] }) {
+function ReportsView({
+  applications,
+  reports,
+}: {
+  applications: ApplicationRecord[];
+  reports: ReportSummary[];
+}) {
+  const [selectedReportId, setSelectedReportId] = useState(reports[0]?.id || "");
+  const selectedReport = reports.find((report) => report.id === selectedReportId) || reports[0] || null;
+  const selectedApplication = selectedReport?.applicationId
+    ? applications.find((application) => application.application_id === selectedReport.applicationId)
+    : null;
+  const completedApplications = applications.filter(isDecisionFinal);
+  const pendingApplications = applications.filter((application) => !isDecisionFinal(application) && isManualReview(application));
+  const untouchedApplications = applications.filter((application) => !isDecisionFinal(application) && !isManualReview(application));
+
+  useEffect(() => {
+    if (!reports.length) {
+      setSelectedReportId("");
+      return;
+    }
+    setSelectedReportId((currentId) => reports.some((report) => report.id === currentId) ? currentId : reports[0].id);
+  }, [reports]);
+
+  return (
+    <div className="grid gap-5">
+      <div className="grid gap-4 xl:grid-cols-3">
+        <ApplicationStatusPanel applications={completedApplications} emptyText="Tamamlanan başvuru yok." title="Tamamlanmış başvurular" tone="green" />
+        <ApplicationStatusPanel applications={untouchedApplications} emptyText="İşlem bekleyen yeni kayıt yok." title="Henüz işlem yapılmamış" tone="neutral" />
+        <ApplicationStatusPanel applications={pendingApplications} emptyText="Bekleyen manuel karar yok." title="Beklemede" tone="gold" />
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
+        <Card>
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Raporlar</p>
+          <h2 className="mt-2 font-display text-3xl font-bold">Uzman rapor ekranı</h2>
+          {!reports.length ? (
+            <div className="mt-6">
+              <EmptyState title="Henüz rapor yok" description="Başvuru detayında yazılan kanaat raporları ve analiz raporları burada listelenir." />
+            </div>
+          ) : (
+            <div className="mt-6 grid gap-3">
+              {reports.map((report) => {
+                const application = report.applicationId
+                  ? applications.find((item) => item.application_id === report.applicationId)
+                  : null;
+                return (
+                  <button
+                    className={`rounded-xl border p-4 text-left transition ${
+                      selectedReport?.id === report.id ? "border-primary/50 bg-primary/10" : "border-white/10 bg-black/25 hover:border-primary/30"
+                    }`}
+                    key={report.id}
+                    onClick={() => setSelectedReportId(report.id)}
+                    type="button"
+                  >
+                    <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-center">
+                      <strong>{report.title}</strong>
+                      <span className="text-sm text-muted">{formatDate(report.createdAt)}</span>
+                      <StatusBadge tone="gold">{report.type}</StatusBadge>
+                    </div>
+                    <p className="mt-2 text-sm text-muted">
+                      Başvuru: {report.applicationId || "Başvuru bilgisi yok"}
+                      {application ? ` - ${application.customer_name}` : ""}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Rapor Detayı</p>
+          {selectedReport ? (
+            <div className="mt-4 grid gap-4">
+              <div>
+                <h3 className="font-display text-2xl font-bold">{selectedReport.title}</h3>
+                <p className="mt-2 text-sm text-muted">{formatDate(selectedReport.createdAt)} · {selectedReport.type}</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/25 p-4 text-sm">
+                <DetailLine label="Başvuru" value={selectedReport.applicationId || "Bağlı başvuru yok"} />
+                <div className="mt-4 grid gap-3">
+                  <DetailLine label="Müşteri" value={selectedApplication?.customer_name || "Başvuru kaydı bulunamadı"} />
+                  <DetailLine label="Durum" value={selectedApplication?.status || "Durum bilgisi yok"} />
+                  <DetailLine label="Risk" value={selectedApplication?.risk_level || "Risk bilgisi yok"} />
+                </div>
+              </div>
+              {selectedReport.content ? (
+                <p className="max-h-[260px] overflow-y-auto rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm text-muted">
+                  {selectedReport.content}
+                </p>
+              ) : (
+                <p className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm text-muted">
+                  Rapor içeriği dosya olarak kaydedilmiş; bağlı başvuru bilgisi yukarıda gösteriliyor.
+                </p>
+              )}
+            </div>
+          ) : (
+            <EmptyState title="Rapor seçilmedi" description="Soldaki listeden rapor seçildiğinde bağlı başvuru burada görünür." />
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function ApplicationStatusPanel({
+  applications,
+  emptyText,
+  title,
+  tone,
+}: {
+  applications: ApplicationRecord[];
+  emptyText: string;
+  title: string;
+  tone: "gold" | "green" | "red" | "neutral";
+}) {
   return (
     <Card>
-      <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Raporlar</p>
-      <h2 className="mt-2 font-display text-3xl font-bold">Uzman rapor ekranı</h2>
-      {!reports.length ? (
-        <div className="mt-6">
-          <EmptyState title="Henüz rapor yok" description="Başvuru detayında yazılan kanaat raporları ve analiz raporları burada listelenir." />
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Başvuru Paneli</p>
+          <h3 className="mt-2 font-display text-xl font-bold">{title}</h3>
         </div>
-      ) : (
-        <div className="mt-6 grid gap-3">
-          {reports.map((report) => (
-            <article className="rounded-xl border border-white/10 bg-black/25 p-4" key={report.id}>
-              <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-center">
-                <strong>{report.title}</strong>
-                <span className="text-sm text-muted">{formatDate(report.createdAt)}</span>
-                <StatusBadge tone="gold">{report.type}</StatusBadge>
-              </div>
-              {report.applicationId ? <p className="mt-2 text-sm text-muted">Başvuru: {report.applicationId}</p> : null}
-              {report.content ? <p className="mt-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm text-muted">{report.content}</p> : null}
-            </article>
-          ))}
-        </div>
-      )}
+        <StatusBadge tone={tone}>{String(applications.length)}</StatusBadge>
+      </div>
+      <div className="mt-5 grid max-h-64 gap-3 overflow-y-auto pr-2">
+        {applications.length ? applications.map((application) => (
+          <article className="rounded-lg border border-white/10 bg-black/25 p-3" key={application.application_id}>
+            <strong className="block">{application.customer_name}</strong>
+            <span className="mt-1 block text-xs text-muted">{application.application_id}</span>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <StatusBadge tone={riskTone(application)}>{application.risk_level || "Risk yok"}</StatusBadge>
+              <span className="text-xs text-muted">{application.status}</span>
+            </div>
+          </article>
+        )) : (
+          <p className="rounded-lg border border-white/10 bg-black/25 p-3 text-sm text-muted">{emptyText}</p>
+        )}
+      </div>
     </Card>
   );
 }
 
-function ProfileView() {
+function ProfileView({
+  applications,
+  reports,
+  user,
+}: {
+  applications: ApplicationRecord[];
+  reports: ReportSummary[];
+  user: User;
+}) {
+  const profile = user.profile || {};
+  const manualCount = applications.filter(isManualReview).length;
+  const completedCount = applications.filter(isDecisionFinal).length;
+  const autoCount = applications.filter(isAutoPreApproved).length;
+
   return (
-    <Card>
-      <EmptyState title="Uzman profili hazır" description="Kurumsal kullanıcı yetkileri ve güvenlik ayarları auth servisi üzerinden yönetilecek." />
-    </Card>
+    <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-5">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Uzman Profili</p>
+            <h2 className="mt-2 font-display text-3xl font-bold">{user.fullName}</h2>
+            <p className="mt-2 text-muted">{user.title || "Banka uzmanı"}</p>
+          </div>
+          <StatusBadge tone={user.emailVerified ? "green" : "gold"}>
+            {user.emailVerified ? "Kurumsal hesap doğrulandı" : "Doğrulama bekliyor"}
+          </StatusBadge>
+        </div>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <MetricCard label="Kullanıcı adı" value={user.username || "-"} tone="neutral" />
+          <MetricCard label="Departman" value={String(profile.department || "Bireysel kredi risk")} tone="neutral" />
+          <MetricCard label="Şube" value={String(profile.branch || "Dijital inceleme")} tone="neutral" />
+        </div>
+
+        <div className="mt-6 grid gap-3 rounded-xl border border-white/10 bg-black/25 p-4 text-sm text-muted md:grid-cols-2">
+          <DetailLine label="E-posta" value={user.email || "-"} />
+          <DetailLine label="Rol" value="Banka uzmanı" />
+          <DetailLine label="Yetki kapsamı" value={String(profile.authorization_level || "Kredi başvuru inceleme")} />
+          <DetailLine label="Karar limiti" value={String(profile.approval_limit || "Dijital kanal politikası")} />
+        </div>
+      </Card>
+
+      <Card>
+        <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Operasyon Özeti</p>
+        <div className="mt-5 grid gap-4">
+          <MetricCard label="Manuel inceleme" value={manualCount} />
+          <MetricCard label="Otomatik ön onay" value={autoCount} tone="green" />
+          <MetricCard label="Tamamlanan karar" value={completedCount} tone="neutral" />
+          <MetricCard label="Kayıtlı rapor" value={reports.length} tone="neutral" />
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -667,6 +982,17 @@ function DetailLine({ label, value }: { label: string; value: string }) {
       <strong className="mt-1 block text-white">{value}</strong>
     </div>
   );
+}
+
+function documentLabel(documentType: string) {
+  const labels: Record<string, string> = {
+    identity: "Kimlik Belgesi",
+    income: "Gelir Belgesi",
+    payroll: "Gelir Belgesi",
+    bank: "Banka Hesap Dökümü",
+    bank_statement: "Banka Hesap Dökümü",
+  };
+  return labels[documentType] || "Başvuru Belgesi";
 }
 
 function WorkflowLine({ title, text, tone }: { title: string; text: string; tone: "gold" | "green" | "red" }) {
@@ -694,7 +1020,6 @@ function isDecisionFinal(application: ApplicationRecord) {
   const statusCode = String(application.status_code || raw?.current_status?.status_code || "").toUpperCase();
   return (
     application.review_route === "completed"
-    || raw?.current_status?.is_final === true
     || statusCode === "APPROVED"
     || statusCode === "REJECTED"
   );

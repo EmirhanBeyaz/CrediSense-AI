@@ -1,7 +1,7 @@
-import { apiRequest } from "@/lib/apiClient";
+import { apiRequest, getAuthToken } from "@/lib/apiClient";
 import { demoApplications } from "@/lib/demoData";
-import { endpoints } from "@/lib/endpoints";
-import type { ApplicationRecord, ReportSummary } from "@/types";
+import { API_BASE_URL, endpoints } from "@/lib/endpoints";
+import type { ApplicationDocument, ApplicationRecord, ReportSummary } from "@/types";
 import { mapApplicationRecord } from "./mappers";
 
 type ApplicationScope = "all" | "auto" | "manual" | "pending" | "completed";
@@ -21,6 +21,27 @@ export async function getExpertApplicationDetail(applicationId: string): Promise
     return demoApplications.find((item) => item.application_id === applicationId) || demoApplications[0];
   }
   return mapApplicationRecord(response.data);
+}
+
+export async function getApplicationDocuments(applicationId: string): Promise<ApplicationDocument[]> {
+  const response = await apiRequest<{ documents: ApplicationDocument[] }>(endpoints.applicationDocuments(applicationId));
+  return response.data?.documents || [];
+}
+
+export async function getApplicationDocumentBlobUrl(documentId: string): Promise<string> {
+  const headers = new Headers();
+  const token = getAuthToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${API_BASE_URL}${endpoints.documentFile(documentId)}`, { headers });
+  if (!response.ok) {
+    throw new Error(`Belge görüntülenemedi. HTTP ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
 }
 
 export async function approveApplication(applicationId: string, note = ""): Promise<ApplicationRecord> {

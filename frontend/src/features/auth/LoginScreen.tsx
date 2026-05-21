@@ -44,16 +44,12 @@ export function LoginScreen({
           <h1 className="font-display text-5xl font-bold leading-tight md:text-7xl">
             Akilli kredi risk ve belge analiz sistemi
           </h1>
-          <p className="mt-5 max-w-3xl text-lg leading-8 text-muted">
-            Musteri basvurusu, belge analizi, banka uzman incelemesi ve odeme sonrasi destek icin iki ayri rol tabanli arayuz.
-          </p>
         </div>
 
         <div className="grid gap-5 lg:grid-cols-2">
           <AuthCard
             buttonLabel="Musteri olarak giris yap"
             defaultIdentifier="musteri@gmail.com"
-            description="Yeni basvuru olustur, PDF belgelerini yukle, AI analiz surecini takip et ve odeme planini yonet."
             icon="person"
             loading={loading}
             onLogin={(identifier, password) => onLogin("customer", identifier, password)}
@@ -67,7 +63,6 @@ export function LoginScreen({
           <AuthCard
             buttonLabel="Uzman paneline giris yap"
             defaultIdentifier="uzman@gmail.com"
-            description="Basvuru kuyrugunu incele, belge guven skorlarini degerlendir ve nihai banka kararini isle."
             icon="account_balance"
             loading={loading}
             onLogin={(identifier, password) => onLogin("expert", identifier, password)}
@@ -87,7 +82,6 @@ export function LoginScreen({
 type AuthCardProps = {
   icon: string;
   title: string;
-  description: string;
   buttonLabel: string;
   defaultIdentifier: string;
   role: Role;
@@ -102,7 +96,6 @@ type AuthCardProps = {
 function AuthCard({
   icon,
   title,
-  description,
   buttonLabel,
   defaultIdentifier,
   role,
@@ -181,23 +174,29 @@ function AuthCard({
         {icon}
       </span>
       <h2 className="font-display text-2xl font-bold">{title}</h2>
-      <p className="mt-3 min-h-16 text-sm leading-6 text-muted">{description}</p>
 
-      <div className="mt-6 grid grid-cols-3 gap-2 rounded-xl border border-white/10 bg-black/20 p-1">
+      <div className="mt-8 grid grid-cols-3 gap-2 rounded-xl border border-white/10 bg-black/20 p-1">
         <button className={tabClass(mode === "login")} onClick={() => setMode("login")} type="button">Giris</button>
         <button className={tabClass(mode === "register")} onClick={() => setMode("register")} type="button">Kayit</button>
         <button className={tabClass(mode === "verify")} onClick={() => setMode("verify")} type="button">Dogrula</button>
       </div>
 
       {mode === "login" ? (
-        <div className="mt-6 grid gap-3">
+        <form
+          className="mt-6 grid gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!loading) {
+              onLogin(identifier, password);
+            }
+          }}
+        >
           <TextField label="Kullanici veya e-posta" onChange={setIdentifier} value={identifier} />
           <PasswordField label="Sifre" onChange={setPassword} placeholder="Sifrenizi girin" value={password} />
           <button
             className="gold-gradient mt-2 rounded-lg px-5 py-3 font-bold text-black transition hover:shadow-glow disabled:opacity-70"
             disabled={loading}
-            onClick={() => onLogin(identifier, password)}
-            type="button"
+            type="submit"
           >
             {loading ? "Giris yapiliyor" : buttonLabel}
           </button>
@@ -214,7 +213,7 @@ function AuthCard({
           >
             Sifremi unuttum
           </button>
-        </div>
+        </form>
       ) : null}
 
       {mode === "register" ? (

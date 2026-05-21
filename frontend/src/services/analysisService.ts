@@ -10,11 +10,13 @@ export async function startAnalysis(form: ApplicationForm, documents: UploadedDo
   formData.append("create_report", "true");
   formData.append("save_application", "true");
 
-  documents
-    .filter((document) => document.file)
-    .forEach((document) => {
-      formData.append("documents", document.file as File);
-    });
+  const uploadedDocuments = documents.filter((document) => document.file);
+
+  uploadedDocuments.forEach((document) => {
+    formData.append("documents", document.file as File);
+    formData.append("document_types", document.id);
+    formData.append("document_names", document.name);
+  });
 
   const response = await apiRequest<unknown>(endpoints.analyze, {
     method: "POST",

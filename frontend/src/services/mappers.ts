@@ -35,6 +35,7 @@ export function mapApplicationRecord(raw: any): ApplicationRecord {
     review_route_text: workflow?.route_text,
     system_action: workflow?.system_action,
     requested_documents: requestedDocuments,
+    documents: Array.isArray(raw?.documents) ? raw.documents : [],
     decision_note: decision?.note,
     report_count: Array.isArray(raw?.expert_reports) ? raw.expert_reports.length : 0,
     credit_request: creditRequest,

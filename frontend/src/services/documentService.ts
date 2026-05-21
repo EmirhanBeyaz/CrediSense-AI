@@ -1,6 +1,6 @@
 import { apiRequest } from "@/lib/apiClient";
 import { endpoints } from "@/lib/endpoints";
-import type { UploadedDocument } from "@/types";
+import type { ApplicationForm, UploadedDocument } from "@/types";
 
 type ApiDocument = {
   document_id: string;
@@ -8,6 +8,7 @@ type ApiDocument = {
   document_name: string;
   original_file_name: string;
   status: string;
+  extracted_form_fields?: Partial<ApplicationForm>;
 };
 
 export async function uploadDocument(document: UploadedDocument, file: File): Promise<UploadedDocument> {
@@ -37,6 +38,7 @@ export async function uploadDocument(document: UploadedDocument, file: File): Pr
     file,
     status: response.data.status === "uploaded" ? "yuklendi" : document.status,
     progress: 100,
+    extractedFields: response.data.extracted_form_fields || {},
   };
 }
 

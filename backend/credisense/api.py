@@ -24,11 +24,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from .analiz_akisi import analyze_documents
+from .analiz_akisi import analyze_documents, extract_form_fields_from_document, normalize_document_type_hint
 from .asistan_deposu import DEFAULT_ASSISTANT_STORE, save_assistant_exchange
 from .banka_kararlari import apply_bank_decision
 from .basvuru_deposu import DEFAULT_APPLICATION_STORE, get_application_record, list_application_records, save_application_record
-from .belge_deposu import DEFAULT_DOCUMENT_FOLDER, DEFAULT_DOCUMENT_STORE, list_user_documents, save_uploaded_document
+from .belge_deposu import (
+    DEFAULT_DOCUMENT_FOLDER,
+    DEFAULT_DOCUMENT_STORE,
+    get_document_record,
+    list_user_documents,
+    save_uploaded_document,
+)
 from .kullanici_deposu import (
     DEFAULT_USER_STORE,
     authenticate_user,
@@ -515,6 +521,11 @@ async def upload_document(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
+    record["extracted_form_fields"] = extract_form_fields_from_document(
+        record["stored_path"],
+        document_type_hint=document_type,
+        source_file_name=record["original_file_name"],
+    )
     return record
 
 
@@ -528,6 +539,31 @@ def list_documents(current_user: Annotated[dict, Depends(_require_current_user)]
         "count": len(documents),
         "documents": documents,
     }
+
+
+@app.get("/documents/{document_id}/file")
+def get_document_file(
+    document_id: str,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> FileResponse:
+    """Yuklenen PDF dosyasini yetkili kullaniciya dondurur."""
+
+    record = get_document_record(document_id, store_path=DOCUMENT_STORE_PATH)
+    if not record:
+        raise HTTPException(status_code=404, detail="Belge bulunamadi.")
+
+    if current_user["role"] == "customer" and record.get("owner_user_id") != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="Bu belgeye erisim yetkiniz yok.")
+
+    file_path = _resolve_document_file_path(record)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Belge dosyasi bulunamadi.")
+
+    return FileResponse(
+        file_path,
+        media_type="application/pdf",
+        filename=str(record.get("original_file_name") or f"{document_id}.pdf"),
+    )
 
 
 @app.post("/analyze")
@@ -549,6 +585,14 @@ async def analyze(
         bool,
         Form(description="Başvuru kaydı ürün deposuna yazılsın mı?"),
     ] = True,
+    document_types: Annotated[
+        list[str] | None,
+        Form(description="Yükleme kartlarından gelen belge tipleri"),
+    ] = None,
+    document_names: Annotated[
+        list[str] | None,
+        Form(description="Yükleme kartlarından gelen belge adları"),
+    ] = None,
     current_user: Annotated[dict, Depends(_require_current_user)] = None,
 ) -> dict:
     """Yüklenen PDF belgelerini ve başvuru formunu analiz eder."""
@@ -562,20 +606,31 @@ async def analyze(
     with tempfile.TemporaryDirectory(prefix="credisense_api_") as temp_dir:
         temp_path = Path(temp_dir)
         document_paths = []
+        document_type_hints: dict[str, str] = {}
+        document_display_names: dict[str, str] = {}
 
-        for document in documents:
+        for index, document in enumerate(documents):
             document_path = _save_upload_file(document, temp_path)
             document_paths.append(document_path)
+            document_type_hints[document_path.name] = normalize_document_type_hint(_list_value(document_types, index))
+            document_display_names[document_path.name] = _list_value(document_names, index)
 
         result = analyze_documents(
             document_paths,
             dataset_path=dataset_path,
             application_form=form_payload,
+            document_type_hints=document_type_hints,
         )
         _ensure_required_document_types(result)
         _ensure_account_document_owner_matches(current_user, result)
-        _save_analyzed_documents(document_paths, result, current_user)
         analysis_id = result["application_id"]
+        saved_documents = _save_analyzed_documents(
+            document_paths,
+            result,
+            current_user,
+            document_type_hints=document_type_hints,
+            document_display_names=document_display_names,
+        )
 
         if create_report:
             report_files = create_analysis_reports(
@@ -596,6 +651,7 @@ async def analyze(
             application_record = result["application_record"]
             application_record["owner_user_id"] = current_user["user_id"]
             application_record["owner_role"] = current_user["role"]
+            application_record["documents"] = [_public_document_record(document) for document in saved_documents]
             result["application_record"] = application_record
             save_application_record(application_record, store_path=APPLICATION_STORE_PATH)
 
@@ -637,6 +693,29 @@ def get_application(
         raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
     _ensure_application_access(record, current_user)
     return _add_expert_workflow(record)
+
+
+@app.get("/applications/{application_id}/documents")
+def list_application_documents(
+    application_id: str,
+    current_user: Annotated[dict, Depends(_require_current_user)],
+) -> dict:
+    """Başvuruyla ilişkili belgeleri uzman veya başvuru sahibi için listeler."""
+
+    record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
+    if not record:
+        raise HTTPException(status_code=404, detail="Başvuru kaydı bulunamadı.")
+    _ensure_application_access(record, current_user)
+
+    documents = list(record.get("documents", []))
+    if not documents and record.get("owner_user_id"):
+        documents = list_user_documents(record["owner_user_id"], store_path=DOCUMENT_STORE_PATH)
+
+    return {
+        "application_id": application_id,
+        "count": len(documents),
+        "documents": [_public_document_record(document, include_view_url=True) for document in documents],
+    }
 
 
 @app.post("/applications/{application_id}/decision")
@@ -964,6 +1043,47 @@ def _ensure_application_access(application_record: dict, current_user: dict) -> 
         return
 
     raise HTTPException(status_code=403, detail="Bu basvuruya erisim yetkiniz yok.")
+
+
+def _resolve_document_file_path(document_record: dict) -> Path:
+    """Belge deposu taşındığında eski mutlak yollar yerine mevcut klasörü dener."""
+
+    stored_path = Path(str(document_record.get("stored_path", "")))
+    if stored_path.exists():
+        return stored_path
+
+    owner_user_id = str(document_record.get("owner_user_id", "")).strip()
+    document_id = str(document_record.get("document_id", "")).strip()
+    if owner_user_id and document_id:
+        relocated_path = Path(DOCUMENT_FOLDER_PATH) / owner_user_id / f"{document_id}.pdf"
+        if relocated_path.exists():
+            return relocated_path
+
+    return stored_path
+
+
+def _public_document_record(document: dict, include_view_url: bool = False) -> dict:
+    """Dosya sistemi yolunu sızdırmadan belge metadata özetini üretir."""
+
+    document_id = str(document.get("document_id", ""))
+    record = {
+        "document_id": document_id,
+        "document_type": document.get("document_type", ""),
+        "document_name": document.get("document_name", ""),
+        "original_file_name": document.get("original_file_name", ""),
+        "status": document.get("status", ""),
+        "created_at": document.get("created_at", ""),
+        "application_id": document.get("application_id", ""),
+    }
+    if include_view_url and document_id:
+        record["view_url"] = f"/documents/{document_id}/file"
+    return record
+
+
+def _list_value(values: list[str] | None, index: int) -> str:
+    if not values or index >= len(values):
+        return ""
+    return str(values[index])
 
 
 def _send_verification_token(user: dict, token: str) -> dict:
@@ -1321,7 +1441,13 @@ def _ensure_required_document_types(result: dict) -> None:
         )
 
 
-def _save_analyzed_documents(document_paths: list[Path], result: dict, current_user: dict) -> None:
+def _save_analyzed_documents(
+    document_paths: list[Path],
+    result: dict,
+    current_user: dict,
+    document_type_hints: dict[str, str] | None = None,
+    document_display_names: dict[str, str] | None = None,
+) -> list[dict]:
     """Analizden gecen PDF'leri belge deposuna da kaydeder.
 
     Boylece kullanici analizi direkt baslatsa bile Belgelerim ve ana paneldeki
@@ -1337,23 +1463,29 @@ def _save_analyzed_documents(document_paths: list[Path], result: dict, current_u
         str(item.get("file_name", "")): str(item.get("document_type", ""))
         for item in result.get("document_quality", [])
     }
+    saved_documents: list[dict] = []
 
     for document_path in document_paths:
-        detected_type = quality_by_name.get(document_path.name, "")
+        detected_type = quality_by_name.get(document_path.name, "") or (document_type_hints or {}).get(document_path.name, "")
         mapped = document_names.get(detected_type)
         if not mapped:
             continue
         document_type, document_name = mapped
+        display_name = (document_display_names or {}).get(document_path.name) or document_name
         with document_path.open("rb") as file_stream:
-            save_uploaded_document(
+            record = save_uploaded_document(
                 file_name=document_path.name,
                 file_stream=file_stream,
                 owner_user_id=current_user["user_id"],
                 document_type=document_type,
-                document_name=document_name,
+                document_name=display_name,
                 store_path=DOCUMENT_STORE_PATH,
                 file_folder=DOCUMENT_FOLDER_PATH,
+                extra_metadata={"application_id": result.get("application_id", "")},
             )
+            saved_documents.append(record)
+
+    return saved_documents
 
 
 def _truthy_form_value(value) -> bool:

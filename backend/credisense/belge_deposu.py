@@ -29,6 +29,7 @@ def save_uploaded_document(
     document_name: str,
     store_path: str | Path = DEFAULT_DOCUMENT_STORE,
     file_folder: str | Path = DEFAULT_DOCUMENT_FOLDER,
+    extra_metadata: dict | None = None,
 ) -> dict:
     """PDF dosyasini kaydeder ve metadata kaydini SQLite'a yazar."""
 
@@ -54,6 +55,8 @@ def save_uploaded_document(
         "status": "uploaded",
         "created_at": _now_iso(),
     }
+    if extra_metadata:
+        record.update(extra_metadata)
     _save_record(record, store_path=store_path)
     return record
 
@@ -81,6 +84,30 @@ def list_user_documents(
         ).fetchall()
 
     return [json.loads(row[0]) for row in rows]
+
+
+def get_document_record(
+    document_id: str,
+    store_path: str | Path = DEFAULT_DOCUMENT_STORE,
+) -> dict | None:
+    """Tek bir belge metadata kaydini dondurur."""
+
+    path = Path(store_path)
+    if not path.exists():
+        return None
+
+    with sqlite3.connect(path) as connection:
+        _create_table_if_needed(connection)
+        row = connection.execute(
+            """
+            SELECT payload
+            FROM documents
+            WHERE document_id = ?
+            """,
+            (document_id,),
+        ).fetchone()
+
+    return json.loads(row[0]) if row else None
 
 
 def _save_record(record: dict, store_path: str | Path) -> None:

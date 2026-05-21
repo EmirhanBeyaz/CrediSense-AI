@@ -55,6 +55,18 @@ export type UploadedDocument = {
   status: "bekliyor" | "yuklendi" | "inceleniyor" | "onaylandi" | "eksik";
   file?: File;
   progress: number;
+  extractedFields?: Partial<ApplicationForm>;
+};
+
+export type ApplicationDocument = {
+  document_id: string;
+  document_type: string;
+  document_name: string;
+  original_file_name: string;
+  status: string;
+  created_at?: string;
+  application_id?: string;
+  view_url?: string;
 };
 
 export type ApplicationForm = {
@@ -85,6 +97,7 @@ export type ApplicationRecord = {
   review_route_text?: string;
   system_action?: string;
   requested_documents?: string[];
+  documents?: ApplicationDocument[];
   decision_note?: string;
   report_count?: number;
   credit_request?: {
