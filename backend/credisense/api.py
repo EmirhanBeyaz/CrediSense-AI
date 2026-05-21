@@ -10,6 +10,7 @@ cevaplarından sorumludur.
 import json
 import re
 import shutil
+import sqlite3
 import tempfile
 import unicodedata
 from contextlib import asynccontextmanager
@@ -44,6 +45,7 @@ from .kullanici_deposu import (
     create_session,
     delete_user_account,
     get_user_by_identifier,
+    get_user_by_id,
     get_user_by_token,
     initialize_user_database,
     public_user_from_record,
@@ -208,7 +210,8 @@ class PrincipalPayoffRequest(BaseModel):
 async def lifespan(_app: FastAPI):
     """API acilirken SQLite kullanici veritabanini hazirlar."""
 
-    initialize_user_database(store_path=USER_STORE_PATH, seed_demo_users=True)
+    initialize_user_database(store_path=USER_STORE_PATH, seed_demo_users=False)
+    _cleanup_orphaned_product_records()
     yield
 
 
@@ -471,6 +474,7 @@ def get_me(current_user: Annotated[dict, Depends(_require_current_user)]) -> dic
 def delete_me(current_user: Annotated[dict, Depends(_require_current_user)]) -> dict:
     """Token sahibi kullanici hesabini siler."""
 
+    _delete_product_records_for_user(current_user["user_id"])
     deleted_user = delete_user_account(current_user["user_id"], store_path=USER_STORE_PATH)
     return {
         "deleted": True,
@@ -505,13 +509,18 @@ def get_my_payment_plan(current_user: Annotated[dict, Depends(_require_current_u
     """Musterinin aktif odeme planini veritabanindan dondurur."""
 
     _require_customer(current_user)
+    _cleanup_orphaned_product_records()
     profile = current_user.get("profile", {})
     active_loan_id = str(profile.get("active_loan_id", "")).strip()
     active_application_id = str(profile.get("active_application_id", "")).strip()
 
     payment_plan = get_payment_plan(active_loan_id, store_path=PAYMENT_STORE_PATH) if active_loan_id else None
+    if payment_plan and not _payment_plan_belongs_to_approved_application(payment_plan, current_user):
+        payment_plan = None
     if not payment_plan and active_application_id:
         payment_plan = get_payment_plan_by_application(active_application_id, store_path=PAYMENT_STORE_PATH)
+        if payment_plan and not _payment_plan_belongs_to_approved_application(payment_plan, current_user):
+            payment_plan = None
     if not payment_plan:
         payment_plan = _find_latest_customer_payment_plan(current_user)
     if not payment_plan:
@@ -522,10 +531,7 @@ def get_my_payment_plan(current_user: Annotated[dict, Depends(_require_current_u
             _attach_payment_plan_to_customer_profile(approved_application, payment_plan)
 
     if not payment_plan:
-        if not active_loan_id and not active_application_id:
-            raise HTTPException(status_code=404, detail="Aktif odeme plani bulunamadi.")
-        payment_plan = _create_profile_payment_plan(current_user)
-        save_payment_plan(payment_plan, store_path=PAYMENT_STORE_PATH)
+        raise HTTPException(status_code=404, detail="Aktif odeme plani bulunamadi.")
 
     return payment_plan
 
@@ -866,6 +872,7 @@ def create_expert_report(
         author=current_user.get("full_name", ""),
         store_path=REPORT_STORE_PATH,
     )
+    report = _add_report_owner_name(report)
 
     expert_reports = list(record.get("expert_reports", []))
     expert_reports.append(report)
@@ -902,6 +909,7 @@ def create_payment_plan(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
     save_payment_plan(payment_plan, store_path=PAYMENT_STORE_PATH)
+    _attach_payment_plan_to_customer_profile(record, payment_plan)
     return payment_plan
 
 
@@ -1142,6 +1150,7 @@ def list_reports(
         store_path=REPORT_STORE_PATH,
         limit=limit,
     )
+    reports = [_add_report_owner_name(report) for report in reports]
     return {
         "count": len(reports),
         "reports": reports,
@@ -1475,6 +1484,210 @@ def _model_to_dict(model: BaseModel) -> dict:
     return model.dict(exclude_none=True)
 
 
+def _add_report_owner_name(report: dict) -> dict:
+    """Rapor listesinde ID yerine basvuru sahibini de gosterilebilir hale getirir."""
+
+    enriched = dict(report)
+    application_id = str(enriched.get("application_id", "")).strip()
+    owner_user_id = str(enriched.get("owner_user_id", "")).strip()
+    customer_name = ""
+
+    if application_id:
+        application_record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
+        if application_record:
+            customer_name = str(application_record.get("applicant", {}).get("full_name", "")).strip()
+            owner_user_id = owner_user_id or str(application_record.get("owner_user_id", "")).strip()
+
+    if not customer_name and owner_user_id:
+        owner = get_user_by_id(owner_user_id, store_path=USER_STORE_PATH)
+        customer_name = str(owner.get("full_name", "")).strip() if owner else ""
+
+    enriched["customer_name"] = customer_name or "Kullanıcı bilgisi yok"
+    return enriched
+
+
+def _cleanup_orphaned_product_records() -> None:
+    """User tablosundan silinen kisilere ait urun kayitlarini temizler."""
+
+    valid_user_ids = _current_user_ids()
+    if not valid_user_ids:
+        return
+
+    orphan_application_ids = _delete_application_records(
+        lambda payload: bool(payload.get("owner_user_id")) and payload.get("owner_user_id") not in valid_user_ids,
+    )
+    orphan_loan_ids = _delete_payment_records(
+        lambda payload: _is_orphan_payment_plan(payload, valid_user_ids, orphan_application_ids),
+    )
+    _delete_report_records(
+        lambda payload: (
+            (bool(payload.get("owner_user_id")) and payload.get("owner_user_id") not in valid_user_ids)
+            or (bool(payload.get("application_id")) and not get_application_record(str(payload.get("application_id")), store_path=APPLICATION_STORE_PATH))
+        ),
+    )
+    _delete_document_records(lambda payload: bool(payload.get("owner_user_id")) and payload.get("owner_user_id") not in valid_user_ids)
+    _delete_assistant_records(
+        lambda payload: (
+            (bool(payload.get("user_id")) and payload.get("user_id") not in valid_user_ids)
+            or payload.get("loan_id") in orphan_loan_ids
+        ),
+    )
+    _delete_orphan_document_folders(valid_user_ids)
+
+
+def _delete_product_records_for_user(user_id: str) -> None:
+    """Hesap silinince kullaniciya ait basvuru, belge, rapor, odeme ve asistan kayitlarini siler."""
+
+    application_ids = _application_ids_for_user(user_id)
+    loan_ids = _loan_ids_for_user(user_id, application_ids)
+
+    _delete_application_records(lambda payload: payload.get("owner_user_id") == user_id)
+    _delete_payment_records(
+        lambda payload: payload.get("customer_user_id") == user_id or payload.get("application_id") in application_ids,
+    )
+    _delete_report_records(
+        lambda payload: payload.get("owner_user_id") == user_id or payload.get("application_id") in application_ids,
+    )
+    _delete_document_records(lambda payload: payload.get("owner_user_id") == user_id)
+    _delete_assistant_records(lambda payload: payload.get("user_id") == user_id or payload.get("loan_id") in loan_ids)
+    _delete_document_folder(user_id)
+
+
+def _current_user_ids() -> set[str]:
+    path = Path(USER_STORE_PATH)
+    if not path.exists():
+        return set()
+
+    try:
+        with sqlite3.connect(path) as connection:
+            rows = connection.execute("SELECT user_id FROM users").fetchall()
+    except sqlite3.Error:
+        return set()
+
+    return {str(row[0]) for row in rows if row and row[0]}
+
+
+def _application_ids_for_user(user_id: str) -> set[str]:
+    return _payload_keys(
+        APPLICATION_STORE_PATH,
+        "applications",
+        "application_id",
+        lambda payload: payload.get("owner_user_id") == user_id,
+    )
+
+
+def _loan_ids_for_user(user_id: str, application_ids: set[str]) -> set[str]:
+    return _payload_keys(
+        PAYMENT_STORE_PATH,
+        "payment_plans",
+        "loan_id",
+        lambda payload: payload.get("customer_user_id") == user_id or payload.get("application_id") in application_ids,
+    )
+
+
+def _is_orphan_payment_plan(payload: dict, valid_user_ids: set[str], orphan_application_ids: set[str]) -> bool:
+    customer_user_id = str(payload.get("customer_user_id", "")).strip()
+    application_id = str(payload.get("application_id", "")).strip()
+
+    if customer_user_id and customer_user_id not in valid_user_ids:
+        return True
+    if not application_id:
+        return True
+    if application_id in orphan_application_ids:
+        return True
+
+    application_record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
+    if not application_record:
+        return True
+
+    status_code = str(application_record.get("current_status", {}).get("status_code", "")).upper()
+    return status_code != "APPROVED"
+
+
+def _delete_application_records(predicate) -> set[str]:
+    return _delete_payload_rows(APPLICATION_STORE_PATH, "applications", "application_id", predicate)
+
+
+def _delete_payment_records(predicate) -> set[str]:
+    return _delete_payload_rows(PAYMENT_STORE_PATH, "payment_plans", "loan_id", predicate)
+
+
+def _delete_report_records(predicate) -> set[str]:
+    return _delete_payload_rows(REPORT_STORE_PATH, "reports", "report_id", predicate)
+
+
+def _delete_document_records(predicate) -> set[str]:
+    deleted_document_ids = _delete_payload_rows(DOCUMENT_STORE_PATH, "documents", "document_id", predicate)
+    return deleted_document_ids
+
+
+def _delete_assistant_records(predicate) -> set[str]:
+    return _delete_payload_rows(ASSISTANT_STORE_PATH, "assistant_messages", "message_id", predicate)
+
+
+def _payload_keys(store_path: str | Path, table_name: str, key_column: str, predicate) -> set[str]:
+    keys: set[str] = set()
+    for key, payload in _iter_payload_rows(store_path, table_name, key_column):
+        if predicate(payload):
+            keys.add(key)
+    return keys
+
+
+def _delete_payload_rows(store_path: str | Path, table_name: str, key_column: str, predicate) -> set[str]:
+    keys_to_delete = _payload_keys(store_path, table_name, key_column, predicate)
+    if not keys_to_delete:
+        return set()
+
+    path = Path(store_path)
+    try:
+        with sqlite3.connect(path) as connection:
+            for key in keys_to_delete:
+                connection.execute(f"DELETE FROM {table_name} WHERE {key_column} = ?", (key,))
+    except sqlite3.Error:
+        return set()
+
+    return keys_to_delete
+
+
+def _iter_payload_rows(store_path: str | Path, table_name: str, key_column: str) -> list[tuple[str, dict]]:
+    path = Path(store_path)
+    if not path.exists():
+        return []
+
+    try:
+        with sqlite3.connect(path) as connection:
+            rows = connection.execute(f"SELECT {key_column}, payload FROM {table_name}").fetchall()
+    except sqlite3.Error:
+        return []
+
+    payload_rows: list[tuple[str, dict]] = []
+    for key, payload_text in rows:
+        try:
+            payload = json.loads(payload_text)
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        payload_rows.append((str(key), payload))
+    return payload_rows
+
+
+def _delete_orphan_document_folders(valid_user_ids: set[str]) -> None:
+    folder = Path(DOCUMENT_FOLDER_PATH)
+    if not folder.exists():
+        return
+
+    for child in folder.iterdir():
+        if child.is_dir() and child.name not in valid_user_ids:
+            _delete_document_folder(child.name)
+
+
+def _delete_document_folder(user_id: str) -> None:
+    base_folder = Path(DOCUMENT_FOLDER_PATH).resolve()
+    target = (base_folder / user_id).resolve()
+    if base_folder == target or base_folder not in target.parents or not target.exists():
+        return
+    shutil.rmtree(target, ignore_errors=True)
+
+
 def _ensure_payment_plan_access(payment_plan: dict, current_user: dict) -> None:
     """Odeme planinda rol ve sahiplik kontrolu yapar."""
 
@@ -1488,7 +1701,7 @@ def _find_latest_customer_payment_plan(current_user: dict) -> dict | None:
 
     payment_plans = list_payment_plans(store_path=PAYMENT_STORE_PATH, limit=100)
     for payment_plan in payment_plans:
-        if _can_access_payment_plan(payment_plan, current_user):
+        if _can_access_payment_plan(payment_plan, current_user) and _payment_plan_belongs_to_approved_application(payment_plan, current_user):
             return payment_plan
     return None
 
@@ -1558,7 +1771,7 @@ def _can_access_payment_plan(payment_plan: dict, current_user: dict) -> bool:
         return True
 
     profile = current_user.get("profile", {})
-    if payment_plan.get("loan_id") == profile.get("active_loan_id"):
+    if payment_plan.get("application_id") and payment_plan.get("loan_id") == profile.get("active_loan_id"):
         return True
 
     application_id = payment_plan.get("application_id", "")
@@ -1567,6 +1780,24 @@ def _can_access_payment_plan(payment_plan: dict, current_user: dict) -> bool:
 
     application_record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
     return bool(application_record and application_record.get("owner_user_id") == current_user["user_id"])
+
+
+def _payment_plan_belongs_to_approved_application(payment_plan: dict, current_user: dict) -> bool:
+    """Profil veya eski fallback verisinden gelen plansiz kredi gorunumunu engeller."""
+
+    application_id = str(payment_plan.get("application_id", "")).strip()
+    if not application_id:
+        return False
+
+    application_record = get_application_record(application_id, store_path=APPLICATION_STORE_PATH)
+    if not application_record:
+        return False
+
+    if application_record.get("owner_user_id") != current_user["user_id"]:
+        return False
+
+    status_code = str(application_record.get("current_status", {}).get("status_code", "")).upper()
+    return status_code == "APPROVED"
 
 
 def _create_profile_payment_plan(current_user: dict) -> dict:

@@ -35,7 +35,7 @@ def test_sample_documents_produce_expected_risk_summary() -> None:
     }
     assert all(item["missing_fields"] == [] for item in result["document_quality"])
     assert all(item["pdf_extraction"]["ok"] is True for item in result["document_quality"])
-    assert result["features"]["document_confidence_score"] == 1.0
+    assert 0.9 <= result["features"]["document_confidence_score"] < 1.0
     assert result["consistency"]["consistency_score"] == 1.0
     assert result["risk"]["decision_source"] == "baseline_formula"
     assert result["risk"]["decision_summary"]["decision_code"] in {

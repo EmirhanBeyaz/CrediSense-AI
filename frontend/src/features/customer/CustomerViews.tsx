@@ -80,6 +80,7 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, onUser
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [customerApplications, setCustomerApplications] = useState<ApplicationRecord[]>([]);
   const [latestApplication, setLatestApplication] = useState<ApplicationRecord | null>(null);
+  const [selectedApplicationId, setSelectedApplicationId] = useState("");
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisMessage, setAnalysisMessage] = useState("");
   const [kvkkAccepted, setKvkkAccepted] = useState(false);
@@ -145,6 +146,11 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, onUser
 
     setCustomerApplications(nextApplications);
     setLatestApplication(latest);
+    setSelectedApplicationId((currentId) =>
+      nextApplications.some((application) => application.application_id === currentId)
+        ? currentId
+        : latest?.application_id || "",
+    );
     setSavedDocuments(mergeRequestedDocuments(nextDocuments, latest?.requested_documents || []));
     setPaymentPlan(paymentResult.status === "fulfilled" ? paymentResult.value : null);
     setWallet(walletResult.status === "fulfilled" ? walletResult.value : { balance: 0, currency: "TRY", transactions: [] });
@@ -221,6 +227,7 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, onUser
     }
 
     setAnalysisMessage("");
+    setStages(baseStages);
     setAnalysisLoading(true);
     onNavigate("analysis-process");
     let analysisCompleted = false;
@@ -232,6 +239,7 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, onUser
         setStages,
       );
       setAnalysisResult(result);
+      setSelectedApplicationId(result.applicationId);
       analysisCompleted = true;
       refreshCustomerData();
       setAnalysisMessage("AI analiz sureci tamamlandi. Sonuclar karar destek amaclidir; nihai karar banka onayiyla verilir.");
@@ -336,7 +344,9 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, onUser
   const applicationGroups = applicationGroupsWithApprovedCredit(customerApplications, paymentPlan, user);
   const latestPendingApplication = applicationGroups.pending[0] || null;
   const latestApprovedApplication = applicationGroups.approved[0] || null;
-  const focusedApplication = latestPendingApplication || latestApprovedApplication || latestApplication;
+  const selectedApplication = customerApplications.find((application) => application.application_id === selectedApplicationId) || null;
+  const focusedApplication = selectedApplication || latestPendingApplication || latestApprovedApplication || latestApplication;
+  const focusedPaymentPlan = paymentPlan && paymentPlanBelongsToApplication(paymentPlan, focusedApplication) ? paymentPlan : null;
   const displayResult = analysisResult || analysisResultFromApplication(focusedApplication);
 
   if (activeView === "customer-home") {
@@ -368,7 +378,17 @@ export function CustomerViews({ activeView, onAccountDeleted, onNavigate, onUser
     return <AnalysisResults applications={customerApplications} paymentPlan={paymentPlan} user={user} result={displayResult} onNavigate={onNavigate} />;
   }
   if (activeView === "bank-approval") {
-    return <BankApproval latestApplication={focusedApplication} paymentPlan={paymentPlan} result={displayResult} onNavigate={onNavigate} />;
+    return (
+      <BankApproval
+        applications={customerApplications}
+        latestApplication={focusedApplication}
+        onApplicationSelect={setSelectedApplicationId}
+        onNavigate={onNavigate}
+        paymentPlan={focusedPaymentPlan}
+        result={displayResult}
+        selectedApplicationId={focusedApplication?.application_id || selectedApplicationId}
+      />
+    );
   }
   if (activeView === "payment-plan") {
     return (
@@ -761,12 +781,18 @@ function AnalysisResults({
 }
 
 function BankApproval({
+  applications,
   latestApplication,
+  selectedApplicationId,
+  onApplicationSelect,
   result,
   paymentPlan,
   onNavigate,
 }: {
+  applications: ApplicationRecord[];
   latestApplication: ApplicationRecord | null;
+  selectedApplicationId: string;
+  onApplicationSelect: (applicationId: string) => void;
   result: AnalysisResult | null;
   paymentPlan: PaymentPlan | null;
   onNavigate: (view: CustomerView) => void;
@@ -786,15 +812,35 @@ function BankApproval({
   }
 
   const statusCode = latestApplication?.status_code || "";
-  const approved = Boolean(paymentPlan) || statusCode === "APPROVED";
+  const approved = statusCode === "APPROVED";
   const rejected = statusCode === "REJECTED";
   const statusText = approved ? "Onaylandi" : rejected ? "Reddedildi" : latestApplication?.status || "Beklemede";
 
   return (
     <div className="grid gap-5 xl:grid-cols-2">
       <Card>
-        <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Banka Onayı</p>
-        <h2 className="mt-2 font-display text-3xl font-bold">Başvuru durumu</h2>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-primary">Banka Onayı</p>
+            <h2 className="mt-2 font-display text-3xl font-bold">Başvuru durumu</h2>
+          </div>
+          {applications.length > 1 ? (
+            <label className="grid gap-2 text-sm text-muted">
+              Başvuru seç
+              <select
+                className="min-w-64 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-white outline-none focus:border-primary/60"
+                onChange={(event) => onApplicationSelect(event.target.value)}
+                value={selectedApplicationId}
+              >
+                {applications.map((application) => (
+                  <option className="bg-[#101113]" key={application.application_id} value={application.application_id}>
+                    {application.application_id} - {application.status || "Durum bekleniyor"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <MetricCard label="AI Önerisi" value={latestApplication?.ai_recommendation ? "Karar destek hazır" : "Analiz bekleniyor"} />
           <MetricCard label="Banka Onayı" value={statusText} tone={approved ? "green" : rejected ? "red" : "neutral"} />
@@ -811,7 +857,14 @@ function BankApproval({
         ) : null}
       </Card>
       <Card>
-        <ChartCard />
+        {paymentPlan ? (
+          <ChartCard paymentPlan={paymentPlan} />
+        ) : (
+          <EmptyState
+            title={approved ? "Ödeme planı hazırlanıyor" : "Ödeme planı yok"}
+            description="Ödeme analitiği yalnızca banka onayı tamamlanıp gerçek ödeme planı oluştuğunda gösterilir."
+          />
+        )}
       </Card>
     </div>
   );
@@ -1786,9 +1839,13 @@ function applicationGroupsWithApprovedCredit(
 }
 
 function approvedCreditApplicationRecord(paymentPlan: PaymentPlan | null, user: User): ApplicationRecord | null {
+  if (!paymentPlan) {
+    return null;
+  }
+
   const profile = user.profile || {};
-  const activeLoanId = paymentPlan?.loan_id || String(profile.active_loan_id || "");
-  const activeApplicationId = String(profile.active_application_id || "");
+  const activeLoanId = paymentPlan.loan_id || String(profile.active_loan_id || "");
+  const activeApplicationId = paymentPlan.application_id || String(profile.active_application_id || "");
 
   if (!activeLoanId && !activeApplicationId) {
     return null;
@@ -1808,15 +1865,13 @@ function approvedCreditApplicationRecord(paymentPlan: PaymentPlan | null, user: 
   return {
     application_id: activeApplicationId || activeLoanId,
     customer_name: user.fullName,
-    status: paymentPlan ? "Kredi onaylandı, ödeme planı aktif" : "Kredi onaylandı",
+    status: "Kredi onaylandı, ödeme planı aktif",
     status_code: "APPROVED",
     risk_score: 29,
     risk_level: "Düşük",
     review_route: "completed",
     review_route_text: "Onaylanan kredi",
-    system_action: paymentPlan
-      ? "Banka onayı tamamlandı ve ödeme planı oluşturuldu."
-      : "Banka onayı tamamlandı. Ödeme planı bilgisi bekleniyor.",
+    system_action: "Banka onayı tamamlandı ve ödeme planı oluşturuldu.",
     ai_recommendation: "Onaylı kredi kaydı müşteri profilinden alındı.",
     credit_request: {
       requested_amount: Number.isFinite(requestedAmount) ? requestedAmount : undefined,
@@ -1825,15 +1880,13 @@ function approvedCreditApplicationRecord(paymentPlan: PaymentPlan | null, user: 
     },
     reasons: [
       "Banka onayı tamamlandığı için bu kayıt onaylananlar panelinde tutulur.",
-      paymentPlan
-        ? `Aktif ödeme planı: ${activeLoanId}.`
-        : `Aktif kredi: ${activeLoanId || activeApplicationId}.`,
+      `Aktif ödeme planı: ${activeLoanId}.`,
     ],
     raw: {
       source: "active_credit_profile",
       active_loan_id: activeLoanId,
       active_application_id: activeApplicationId,
-      payment_plan_available: Boolean(paymentPlan),
+      payment_plan_available: true,
     },
   };
 }
@@ -1851,6 +1904,13 @@ function hasMatchingApprovedCredit(applications: ApplicationRecord[], approvedCr
       || (Boolean(activeLoanId) && applicationLoanId === activeLoanId)
     );
   });
+}
+
+function paymentPlanBelongsToApplication(paymentPlan: PaymentPlan, application: ApplicationRecord | null) {
+  if (!application) {
+    return false;
+  }
+  return Boolean(paymentPlan.application_id) && paymentPlan.application_id === application.application_id;
 }
 
 function splitApplicationsByApproval(applications: ApplicationRecord[]) {
@@ -1937,9 +1997,9 @@ function analysisResultFromApplication(application: ApplicationRecord | null): A
     eligibilityScore,
     riskScore,
     riskLevel: application.risk_level || "Bekleniyor",
-    documentConfidenceScore: application.document_confidence_score || 0,
-    consistencyScore: application.consistency_score || 0,
-    anomalyScore: application.anomaly_score || 0,
+    documentConfidenceScore: application.document_confidence_score ?? 0,
+    consistencyScore: application.consistency_score ?? 0,
+    anomalyScore: application.anomaly_score ?? 0,
     aiRecommendation: application.ai_recommendation || "AI sonucu karar destek amaçlıdır.",
     summary: application.system_action || application.status || "Başvuru durumu backend kaydından alındı.",
     reasons,
@@ -1992,10 +2052,16 @@ async function runAnalysisWithVisibleStages(
   documents: UploadedDocument[],
   setStages: Dispatch<SetStateAction<AnalysisStage[]>>,
 ) {
+  type StepResult =
+    | { type: "done"; result: AnalysisResult }
+    | { type: "error"; error: unknown }
+    | { type: "tick" };
+
   const analysisPromise = startBackendAnalysis(form, documents);
   const watchedAnalysis = analysisPromise
     .then((result) => ({ type: "done" as const, result }))
     .catch((error) => ({ type: "error" as const, error }));
+  let completedResult: AnalysisResult | null = null;
 
   for (let index = 0; index < baseStages.length; index += 1) {
     setStages((items) =>
@@ -2006,21 +2072,22 @@ async function runAnalysisWithVisibleStages(
       })),
     );
 
-    const stepResult = await Promise.race([
-      watchedAnalysis,
-      wait(700).then(() => ({ type: "tick" as const })),
-    ]);
+    const stepResult: StepResult = completedResult
+      ? await wait(700).then(() => ({ type: "tick" as const }))
+      : await Promise.race([
+          watchedAnalysis,
+          wait(700).then(() => ({ type: "tick" as const })),
+        ]);
 
     if (stepResult.type === "done") {
-      setStages(baseStages.map((stage) => ({ ...stage, status: "tamamlandi", errorMessage: "" })));
-      return stepResult.result;
+      completedResult = stepResult.result;
     }
     if (stepResult.type === "error") {
       throw stepResult.error;
     }
   }
 
-  const result = await analysisPromise;
+  const result = completedResult || await analysisPromise;
   setStages(baseStages.map((stage) => ({ ...stage, status: "tamamlandi", errorMessage: "" })));
   return result;
 }

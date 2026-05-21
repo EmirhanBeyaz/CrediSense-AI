@@ -7,7 +7,6 @@ import { LoadingState } from "@/components/ui/LoadingState";
 import { MetricCard } from "@/components/ui/MetricCard";
 import { ProfileAvatar } from "@/components/ui/ProfileAvatar";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { demoApplications } from "@/lib/demoData";
 import { formatCurrency, scorePercent } from "@/lib/format";
 import { fileToProfileImage } from "@/lib/profileImage";
 import { updateCurrentProfile } from "@/services/authService";
@@ -44,9 +43,17 @@ const extraDocumentOptions = [
   "Son 6 aylık hesap dökümü",
 ];
 
+const emptyApplication: ApplicationRecord = {
+  application_id: "",
+  customer_name: "Başvuru seçilmedi",
+  status: "Kayıt yok",
+  risk_level: "",
+  risk_score: 0,
+};
+
 export function ExpertViews({ activeView, onUserUpdate, showToast, user }: ExpertViewsProps) {
-  const [applications, setApplications] = useState<ApplicationRecord[]>(demoApplications);
-  const [selectedId, setSelectedId] = useState(demoApplications[0].application_id);
+  const [applications, setApplications] = useState<ApplicationRecord[]>([]);
+  const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [reports, setReports] = useState<ReportSummary[]>([]);
@@ -55,14 +62,14 @@ export function ExpertViews({ activeView, onUserUpdate, showToast, user }: Exper
   const [extraDocumentText, setExtraDocumentText] = useState("Güncel gelir belgesi");
   const [reportText, setReportText] = useState("");
   const [profileImageLoading, setProfileImageLoading] = useState(false);
-  const [creditOffer, setCreditOffer] = useState<CreditOfferForm>(() => defaultCreditOfferForm(demoApplications[0]));
+  const [creditOffer, setCreditOffer] = useState<CreditOfferForm>(() => defaultCreditOfferForm(emptyApplication));
 
   useEffect(() => {
     refreshExpertData();
   }, [activeView]);
 
   const selected = useMemo(
-    () => applications.find((application) => application.application_id === selectedId) || applications[0] || demoApplications[0],
+    () => applications.find((application) => application.application_id === selectedId) || applications[0] || emptyApplication,
     [applications, selectedId],
   );
   const manualApplications = useMemo(() => applications.filter(isManualReview), [applications]);
@@ -99,19 +106,28 @@ export function ExpertViews({ activeView, onUserUpdate, showToast, user }: Exper
     setLoading(true);
     try {
       const items = await getExpertApplications();
-      const nextItems = items.length ? items : demoApplications;
-      setApplications(nextItems);
-      setSelectedId((currentId) => nextItems.some((item) => item.application_id === currentId) ? currentId : nextItems[0].application_id);
-      setReports(await getReports());
-    } catch {
-      setApplications(demoApplications);
-      showToast("Backend başvuru listesi alınamadı, demo kayıtlar gösteriliyor.");
+      setApplications(items);
+      setSelectedId((currentId) => items.some((item) => item.application_id === currentId) ? currentId : items[0]?.application_id || "");
+      try {
+        setReports(await getReports());
+      } catch {
+        setReports([]);
+      }
+    } catch (error) {
+      setApplications([]);
+      setSelectedId("");
+      setReports([]);
+      showToast(error instanceof Error ? error.message : "Backend başvuru listesi alınamadı.");
     } finally {
       setLoading(false);
     }
   }
 
   async function handleDecision(action: ExpertDecision) {
+    if (!selected.application_id) {
+      showToast("Karar vermek için önce bir başvuru seçilmeli.");
+      return;
+    }
     if (isDecisionFinal(selected)) {
       showToast("Bu başvuru için final karar verilmiş. Yeni karar girilemez.");
       return;
@@ -147,6 +163,10 @@ export function ExpertViews({ activeView, onUserUpdate, showToast, user }: Exper
   }
 
   async function handleSaveReport() {
+    if (!selected.application_id) {
+      showToast("Rapor kaydetmek için önce bir başvuru seçilmeli.");
+      return;
+    }
     if (reportText.trim().length < 20) {
       showToast("Kanaat raporu en az 20 karakter olmalı.");
       return;
@@ -615,17 +635,21 @@ function DocumentControl({
   }, [activeDocumentId, showToast]);
 
   const activeDocument = documents.find((document) => document.document_id === activeDocumentId) || documents[0];
+  const hasDocumentPackage = Boolean(selected.application_id) && documents.length > 0;
+  const documentConfidenceValue = hasDocumentPackage ? scorePercent(selected.document_confidence_score ?? 0) : "-";
+  const consistencyValue = hasDocumentPackage ? scorePercent(selected.consistency_score ?? 0) : "-";
+  const anomalyValue = hasDocumentPackage ? scorePercent(selected.anomaly_score ?? 0) : "-";
 
   return (
     <div className="grid gap-5 xl:grid-cols-3">
       <Card>
-        <MetricCard label="Belge Güven Skoru" value={scorePercent(selected.document_confidence_score || 0.95)} tone="green" />
+        <MetricCard label="Belge Güven Skoru" value={documentConfidenceValue} tone={hasDocumentPackage ? "green" : "neutral"} />
       </Card>
       <Card>
-        <MetricCard label="Tutarlılık Skoru" value={scorePercent(selected.consistency_score || 0.82)} />
+        <MetricCard label="Tutarlılık Skoru" value={consistencyValue} tone={hasDocumentPackage ? "gold" : "neutral"} />
       </Card>
       <Card>
-        <MetricCard label="Anomali Skoru" value={scorePercent(selected.anomaly_score || 0.25)} tone="red" />
+        <MetricCard label="Anomali Skoru" value={anomalyValue} tone={hasDocumentPackage ? "red" : "neutral"} />
       </Card>
       <RiskReviewPanel selected={selected} />
       <Card className="xl:col-span-3">
@@ -715,6 +739,8 @@ function RiskDetailColumn({ title, items }: { title: string; items: string[] }) 
 }
 
 function RiskAnalysis({ selected }: { selected: ApplicationRecord }) {
+  const hasAnalysisScores = Boolean(selected.application_id);
+
   return (
     <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
       <Card className="text-center">
@@ -729,9 +755,9 @@ function RiskAnalysis({ selected }: { selected: ApplicationRecord }) {
         <h2 className="mt-2 font-display text-3xl font-bold">Karar destek açıklaması</h2>
         <p className="mt-5 rounded-xl border border-primary/20 bg-primary/10 p-4 text-muted">{selected.ai_recommendation}</p>
         <div className="mt-6 grid gap-4 md:grid-cols-3">
-          <MetricCard label="Belge Güveni" value={scorePercent(selected.document_confidence_score || 0.95)} tone="green" />
-          <MetricCard label="Tutarlılık" value={scorePercent(selected.consistency_score || 0.82)} />
-          <MetricCard label="Anomali" value={scorePercent(selected.anomaly_score || 0.25)} tone="red" />
+          <MetricCard label="Belge Güveni" value={hasAnalysisScores ? scorePercent(selected.document_confidence_score ?? 0) : "-"} tone={hasAnalysisScores ? "green" : "neutral"} />
+          <MetricCard label="Tutarlılık" value={hasAnalysisScores ? scorePercent(selected.consistency_score ?? 0) : "-"} tone={hasAnalysisScores ? "gold" : "neutral"} />
+          <MetricCard label="Anomali" value={hasAnalysisScores ? scorePercent(selected.anomaly_score ?? 0) : "-"} tone={hasAnalysisScores ? "red" : "neutral"} />
         </div>
         {selected.reasons?.length ? (
           <ul className="mt-6 grid gap-2 text-sm text-muted">
@@ -991,7 +1017,7 @@ function ReportsView({
                     </div>
                     <p className="mt-2 text-sm text-muted">
                       Başvuru: {report.applicationId || "Başvuru bilgisi yok"}
-                      {application ? ` - ${application.customer_name}` : ""}
+                      {report.customerName ? ` - ${report.customerName}` : application ? ` - ${application.customer_name}` : ""}
                     </p>
                   </button>
                 );
@@ -1011,7 +1037,7 @@ function ReportsView({
               <div className="rounded-xl border border-white/10 bg-black/25 p-4 text-sm">
                 <DetailLine label="Başvuru" value={selectedReport.applicationId || "Bağlı başvuru yok"} />
                 <div className="mt-4 grid gap-3">
-                  <DetailLine label="Müşteri" value={selectedApplication?.customer_name || "Başvuru kaydı bulunamadı"} />
+                  <DetailLine label="Müşteri" value={selectedReport.customerName || selectedApplication?.customer_name || "Başvuru kaydı bulunamadı"} />
                   <DetailLine label="Durum" value={selectedApplication?.status || "Durum bilgisi yok"} />
                   <DetailLine label="Risk" value={selectedApplication?.risk_level || "Risk bilgisi yok"} />
                 </div>

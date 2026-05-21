@@ -1,5 +1,4 @@
 import { apiRequest, getAuthToken } from "@/lib/apiClient";
-import { demoApplications } from "@/lib/demoData";
 import { API_BASE_URL, endpoints } from "@/lib/endpoints";
 import type { ApplicationDocument, ApplicationRecord, ReportSummary } from "@/types";
 import { mapApplicationRecord } from "./mappers";
@@ -16,7 +15,7 @@ export async function getExpertApplications(scope: ApplicationScope = "all"): Pr
   const path = scope === "all" ? endpoints.applications : `${endpoints.applications}?scope=${scope}`;
   const response = await apiRequest<{ applications: unknown[] }>(path);
   if (!response.data) {
-    return filterDemoApplications(scope);
+    throw new Error(response.error || "Başvuru listesi alınamadı.");
   }
   return response.data.applications.map(mapApplicationRecord);
 }
@@ -24,7 +23,7 @@ export async function getExpertApplications(scope: ApplicationScope = "all"): Pr
 export async function getExpertApplicationDetail(applicationId: string): Promise<ApplicationRecord> {
   const response = await apiRequest<unknown>(endpoints.applicationDetail(applicationId));
   if (!response.data) {
-    return demoApplications.find((item) => item.application_id === applicationId) || demoApplications[0];
+    throw new Error(response.error || "Başvuru detayı alınamadı.");
   }
   return mapApplicationRecord(response.data);
 }
@@ -73,14 +72,7 @@ export async function createExpertReport(applicationId: string, title: string, c
   });
 
   if (!response.data) {
-    return {
-      id: `RPT-LOCAL-${Date.now()}`,
-      applicationId,
-      title,
-      type: "Uzman kanaat raporu",
-      createdAt: new Date().toISOString(),
-      content,
-    };
+    throw new Error(response.error || "Kanaat raporu kaydedilemedi.");
   }
 
   return {
@@ -89,6 +81,7 @@ export async function createExpertReport(applicationId: string, title: string, c
     title: response.data.report.title,
     type: response.data.report.report_type,
     createdAt: response.data.report.created_at,
+    customerName: response.data.report.customer_name,
     content: response.data.report.content,
   };
 }
@@ -116,17 +109,4 @@ async function sendDecision(
   }
 
   return mapApplicationRecord(response.data);
-}
-
-function filterDemoApplications(scope: ApplicationScope) {
-  if (scope === "auto") {
-    return demoApplications.filter((item) => item.risk_level === "Düşük");
-  }
-  if (scope === "manual" || scope === "pending") {
-    return demoApplications.filter((item) => item.risk_level !== "Düşük");
-  }
-  if (scope === "completed") {
-    return [];
-  }
-  return demoApplications;
 }

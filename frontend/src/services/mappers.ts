@@ -10,20 +10,20 @@ export function mapApplicationRecord(raw: any): ApplicationRecord {
   const workflow = raw?.expert_workflow || {};
   const bankView = raw?.bank_view || {};
   const requestedDocuments = decision?.requested_documents || raw?.user_notification?.requested_documents || [];
-  const riskScore = analysis?.risk_score ?? bankView?.risk_score ?? raw?.risk_score ?? 0.72;
+  const riskScore = analysis?.risk_score ?? bankView?.risk_score ?? raw?.risk_score ?? 0;
   const creditRequest = normalizeCreditRequest(raw?.credit_request || {});
 
   return {
     application_id: raw?.application_id || raw?.id || "APP-LOCAL",
-    customer_name: raw?.customer_name || raw?.full_name || applicant?.full_name || documents?.identity?.full_name || "Deniz Kaya",
+    customer_name: raw?.customer_name || raw?.full_name || applicant?.full_name || documents?.identity?.full_name || "Müşteri bilgisi yok",
     status: currentStatus?.status_text || decision?.decision_text || decision?.status || raw?.status || "Uzman incelemesinde",
     status_code: currentStatus?.status_code || decision?.status_code || raw?.status_code,
     created_at: raw?.created_at,
     risk_score: normalizePercent(riskScore),
     risk_level: analysis?.risk_level || bankView?.risk_level || raw?.risk_level || "Orta",
-    document_confidence_score: features?.document_confidence_score ?? raw?.document_confidence_score ?? bankView?.package_quality_score ?? 0.95,
-    consistency_score: features?.consistency_score ?? raw?.consistency_score ?? bankView?.consistency_score ?? 0.82,
-    anomaly_score: features?.anomaly_score ?? raw?.anomaly_score ?? bankView?.anomaly_score ?? 0.25,
+    document_confidence_score: features?.document_confidence_score ?? analysis?.document_confidence_score ?? raw?.document_confidence_score ?? bankView?.package_quality_score ?? 0,
+    consistency_score: features?.consistency_score ?? analysis?.consistency_score ?? raw?.consistency_score ?? bankView?.consistency_score ?? 0,
+    anomaly_score: features?.anomaly_score ?? analysis?.anomaly_score ?? raw?.anomaly_score ?? bankView?.anomaly_score ?? 0,
     ai_recommendation:
       bankView?.recommended_action
       || analysis?.recommended_action
@@ -74,9 +74,9 @@ export function mapAnalysisResult(raw: any): AnalysisResult {
     eligibilityScore: Math.max(0, Math.min(100, Math.round((1 - (risk?.risk_score ?? 0.34)) * 100))),
     riskScore: normalizePercent(risk?.risk_score ?? 0.72),
     riskLevel: risk?.risk_level || "Orta",
-    documentConfidenceScore: features?.document_confidence_score ?? 0.95,
-    consistencyScore: features?.consistency_score ?? 0.82,
-    anomalyScore: features?.anomaly_score ?? 0.25,
+    documentConfidenceScore: features?.document_confidence_score ?? raw?.risk_summary?.document_confidence_score ?? 0,
+    consistencyScore: features?.consistency_score ?? raw?.risk_summary?.consistency_score ?? 0,
+    anomalyScore: features?.anomaly_score ?? raw?.risk_summary?.anomaly_score ?? 0,
     aiRecommendation: "AI önerisi nihai karar değildir; banka uzmanı incelemesi gerekir.",
     summary: "Belgeler katmanlı analizden geçirildi ve karar destek özeti oluşturuldu.",
     reasons: reasons.length ? reasons : [
@@ -93,6 +93,7 @@ export function mapPaymentPlan(raw: any): PaymentPlan {
 
   return {
     loan_id: raw?.loan_id || "LOAN-LOCAL",
+    application_id: raw?.application_id || "",
     approved_amount: Number(raw?.principal ?? raw?.approved_amount ?? 0),
     monthly_payment: Number(raw?.monthly_payment ?? 0),
     maturity_months: Number(raw?.term_months ?? raw?.maturity_months ?? 0),

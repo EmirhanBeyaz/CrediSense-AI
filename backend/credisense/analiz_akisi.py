@@ -72,9 +72,13 @@ def analyze_documents(
         parsed_documents.payroll,
         parsed_documents.bank_statement,
     )
-    features = _build_features(parsed_documents, consistency, form)
+    features = _build_features(
+        parsed_documents,
+        consistency,
+        form,
+        form_document_consistency_score=form_document_consistency.score,
+    )
     data_precedence_warnings = _data_precedence_warnings(form, parsed_documents, features)
-    features["form_document_consistency_score"] = form_document_consistency.score
     risk = score_application(
         features=features,
         consistency_score=consistency.consistency_score,
@@ -142,7 +146,7 @@ def _read_and_parse_documents(
         )
         fallback_fields = _synthetic_fixture_fields(path.name, document_type) if not text.strip() else {}
         fields = fallback_fields or understanding.fields
-        confidence = 1.0 if fallback_fields else understanding.confidence
+        confidence = 0.85 if fallback_fields else understanding.confidence
         missing_fields = [] if fallback_fields else understanding.missing_fields
         warnings = [*(pdf_result.warnings or []), *understanding.warnings]
         if fallback_fields:
@@ -392,15 +396,20 @@ def _build_features(
     parsed: ParsedDocuments,
     consistency: ConsistencyResult,
     application_form: dict,
+    form_document_consistency_score: float = 0.0,
 ) -> dict[str, float]:
     """Risk katmanına gidecek tüm sayısal özellikleri tek sözlükte toplar."""
 
     features: dict[str, float] = {}
     features.update(payroll_features(parsed.payroll))
     features.update(bank_features(parsed.bank_statement))
-    features["consistency_score"] = consistency.consistency_score
-    features["anomaly_score"] = consistency.anomaly_score
+    features["consistency_score"] = _combined_consistency_score(
+        consistency,
+        form_document_consistency_score=form_document_consistency_score,
+    )
+    features["anomaly_score"] = _display_anomaly_score(consistency.anomaly_score)
     features["document_confidence_score"] = _document_confidence(parsed)
+    features["form_document_consistency_score"] = _clamp01(form_document_consistency_score)
     requested_credit_amount = _requested_credit_amount(application_form)
     total_current_debt = _effective_current_debt(application_form, parsed.bank_statement)
     document_estimated_debt = _document_estimated_current_debt(application_form, parsed.bank_statement)
@@ -441,16 +450,56 @@ def _bank_statement_summary(bank: BankStatementInfo | None) -> dict | None:
 
 
 def _document_confidence(parsed: ParsedDocuments) -> float:
-    """Gerekli üç belgenin temel alanlarının dolu olma oranını hesaplar."""
+    """Belge setinin okunabilirlik, alan eksikliği ve parser güvenini dengeler."""
 
-    required_checks = [
-        parsed.identity is not None and bool(parsed.identity.full_name),
-        parsed.payroll is not None and bool(parsed.payroll.full_name and parsed.payroll.net_salary),
-        parsed.bank_statement is not None and len(parsed.bank_statement.transactions) > 0,
-    ]
+    quality_by_type = {
+        str(item.get("document_type") or ""): item
+        for item in parsed.document_quality
+        if isinstance(item, dict)
+    }
+    required_types = ["identity", "payroll", "bank_statement"]
+    scores: list[float] = []
 
-    passed_count = sum(1 for check in required_checks if check)
-    return round(passed_count / len(required_checks), 2)
+    for document_type in required_types:
+        quality = quality_by_type.get(document_type)
+        if not quality:
+            scores.append(0.0)
+            continue
+
+        extraction = quality.get("pdf_extraction") or {}
+        missing_fields = quality.get("missing_fields") or []
+        warnings = quality.get("warnings") or []
+        parser_confidence = _clamp01(_to_float(quality.get("confidence", 0.0)))
+        extraction_score = 1.0 if extraction.get("ok") else 0.0
+        field_score = max(0.0, 1.0 - min(0.35, len(missing_fields) * 0.09))
+        warning_penalty = min(0.18, len(warnings) * 0.04)
+        fallback_penalty = 0.08 if extraction.get("fallback") else 0.0
+        document_score = (parser_confidence * 0.65) + (extraction_score * 0.20) + (field_score * 0.15)
+        document_score = max(0.0, document_score - warning_penalty - fallback_penalty)
+        scores.append(min(0.97, document_score))
+
+    return round(sum(scores) / len(required_types), 2)
+
+
+def _combined_consistency_score(
+    consistency: ConsistencyResult,
+    form_document_consistency_score: float,
+) -> float:
+    """Tutarlılık skorunu form-belge uyumu ve anomali baskısıyla stabil hale getirir."""
+
+    raw_consistency = _clamp01(consistency.consistency_score)
+    form_consistency = _clamp01(form_document_consistency_score)
+    anomaly_pressure = _clamp01(consistency.anomaly_score)
+    score = (raw_consistency * 0.70) + (form_consistency * 0.20) + ((1.0 - anomaly_pressure) * 0.10)
+    if anomaly_pressure > 0:
+        score = min(score, 0.92)
+    return round(min(0.98, max(0.0, score)), 2)
+
+
+def _display_anomaly_score(value: float) -> float:
+    """AI çıktısında manuel inceleme öncesi sert yüzde 100 anomaliden kaçınır."""
+
+    return round(min(0.95, _clamp01(value)), 2)
 
 
 def _debt_to_income(features: dict[str, float], debt_amount: float) -> float:
@@ -709,3 +758,9 @@ def _to_float(value) -> float:
         return float(text)
     except ValueError:
         return 0.0
+
+
+def _clamp01(value) -> float:
+    """Sayısal skoru 0-1 aralığında tutar."""
+
+    return max(0.0, min(1.0, _to_float(value)))

@@ -49,7 +49,7 @@ export function LoginScreen({
         <div className="grid gap-5 lg:grid-cols-2">
           <AuthCard
             buttonLabel="Musteri olarak giris yap"
-            defaultIdentifier="kullanıcı@gmail.com"
+            defaultIdentifier=""
             icon="person"
             loading={loading}
             onLogin={(identifier, password) => onLogin("customer", identifier, password)}
@@ -62,7 +62,7 @@ export function LoginScreen({
           />
           <AuthCard
             buttonLabel="Uzman paneline giris yap"
-            defaultIdentifier="uzman@gmail.com"
+            defaultIdentifier=""
             icon="account_balance"
             loading={loading}
             onLogin={(identifier, password) => onLogin("expert", identifier, password)}
@@ -191,7 +191,7 @@ function AuthCard({
             }
           }}
         >
-          <TextField label="Kullanici veya e-posta" onChange={setIdentifier} value={identifier} />
+          <TextField label="Kullanici veya e-posta" onChange={setIdentifier} placeholder="E-postanızı giriniz" value={identifier} />
           <PasswordField label="Sifre" onChange={setPassword} placeholder="Sifrenizi girin" value={password} />
           <button
             className="gold-gradient mt-2 rounded-lg px-5 py-3 font-bold text-black transition hover:shadow-glow disabled:opacity-70"
@@ -235,7 +235,7 @@ function AuthCard({
 
       {mode === "verify" ? (
         <div className="mt-6 grid gap-3">
-          <TextField label="Kullanici veya e-posta" onChange={setVerificationIdentifier} value={verificationIdentifier} />
+          <TextField label="Kullanici veya e-posta" onChange={setVerificationIdentifier} placeholder="E-postanızı giriniz" value={verificationIdentifier} />
           <TextField label="Dogrulama kodu" onChange={setVerificationToken} value={verificationToken} />
           {message ? <p className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-muted">{message}</p> : null}
           {developmentToken ? (
@@ -256,7 +256,7 @@ function AuthCard({
 
       {mode === "forgot" ? (
         <div className="mt-6 grid gap-3">
-          <TextField label="Hesaba kayitli e-posta" onChange={setResetEmail} type="email" value={resetEmail} />
+          <TextField label="Hesaba kayitli e-posta" onChange={setResetEmail} placeholder="E-postanızı giriniz" type="email" value={resetEmail} />
           {message ? <p className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-muted">{message}</p> : null}
           <button
             className="gold-gradient mt-2 rounded-lg px-5 py-3 font-bold text-black transition hover:shadow-glow disabled:opacity-70"
@@ -274,7 +274,7 @@ function AuthCard({
 
       {mode === "reset" ? (
         <div className="mt-6 grid gap-3">
-          <TextField label="Hesaba kayitli e-posta" onChange={setResetEmail} type="email" value={resetEmail} />
+          <TextField label="Hesaba kayitli e-posta" onChange={setResetEmail} placeholder="E-postanızı giriniz" type="email" value={resetEmail} />
           <TextField label="Sifre sifirlama kodu" onChange={setResetToken} value={resetToken} />
           <PasswordField label="Yeni sifre" onChange={setNewPassword} value={newPassword} />
           <PasswordField label="Yeni sifre tekrar" onChange={setNewPasswordAgain} value={newPasswordAgain} />

@@ -1,6 +1,5 @@
 import { apiRequest } from "@/lib/apiClient";
 import { endpoints } from "@/lib/endpoints";
-import { demoApplications } from "@/lib/demoData";
 import type { ApplicationForm, ApplicationRecord, UploadedDocument } from "@/types";
 import { mapApplicationRecord } from "./mappers";
 
@@ -23,7 +22,7 @@ export async function getCustomerApplications(): Promise<ApplicationRecord[]> {
 export async function getApplicationDetail(applicationId: string): Promise<ApplicationRecord> {
   const response = await apiRequest<unknown>(endpoints.applicationDetail(applicationId));
   if (!response.data) {
-    return demoApplications.find((item) => item.application_id === applicationId) || demoApplications[0];
+    throw new Error(response.error || "Başvuru detayı alınamadı.");
   }
   return mapApplicationRecord(response.data);
 }

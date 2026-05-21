@@ -141,6 +141,7 @@ export type AnalysisResult = {
 
 export type PaymentPlan = {
   loan_id: string;
+  application_id?: string;
   approved_amount: number;
   monthly_payment: number;
   maturity_months: number;
@@ -190,6 +191,7 @@ export type ReportSummary = {
   type: string;
   createdAt: string;
   applicationId?: string;
+  customerName?: string;
   content?: string;
 };
 
