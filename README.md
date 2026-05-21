@@ -46,7 +46,7 @@ bulunduğu klasördür.
 Örnek:
 
 ```powershell
-cd C:\Users\bessi\Desktop\credisenseai\CrediSense-AI
+cd C:\Users\user\Desktop\credisenseai\CrediSense-AI
 ```
 
 Sanal ortam oluşturun:
