@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -7,8 +8,12 @@ from fastapi.testclient import TestClient
 
 from backend.credisense import api as api_module
 from backend.credisense.api import app
+from backend.credisense.asistan_deposu import save_assistant_exchange
 from backend.credisense.basvuru_deposu import save_application_record
+from backend.credisense.belge_deposu import save_uploaded_document
 from backend.credisense.kullanici_deposu import initialize_user_database
+from backend.credisense.odeme_deposu import save_payment_plan
+from backend.credisense.rapor_deposu import save_report_record
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -300,6 +305,109 @@ def test_delete_current_account_removes_login(tmp_path, monkeypatch) -> None:
         },
     )
     assert login_after_delete.status_code == 401
+
+
+def test_register_cleans_packages_for_user_deleted_directly_from_users_table(tmp_path, monkeypatch) -> None:
+    user_store = tmp_path / "credisense_kullanicilar.db"
+    application_store = tmp_path / "basvuru_kayitlari.db"
+    payment_store = tmp_path / "odeme_planlari.db"
+    report_store = tmp_path / "rapor_kayitlari.db"
+    document_store = tmp_path / "belge_kayitlari.db"
+    assistant_store = tmp_path / "asistan_mesajlari.db"
+    document_folder = tmp_path / "yuklenen_belgeler"
+    monkeypatch.setattr("backend.credisense.api.USER_STORE_PATH", user_store)
+    monkeypatch.setattr("backend.credisense.api.APPLICATION_STORE_PATH", application_store)
+    monkeypatch.setattr("backend.credisense.api.PAYMENT_STORE_PATH", payment_store)
+    monkeypatch.setattr("backend.credisense.api.REPORT_STORE_PATH", report_store)
+    monkeypatch.setattr("backend.credisense.api.DOCUMENT_STORE_PATH", document_store)
+    monkeypatch.setattr("backend.credisense.api.ASSISTANT_STORE_PATH", assistant_store)
+    monkeypatch.setattr("backend.credisense.api.DOCUMENT_FOLDER_PATH", document_folder)
+    initialize_user_database(store_path=user_store, seed_demo_users=False)
+    client = TestClient(app)
+
+    old_register_response = client.post(
+        "/auth/register",
+        json={
+            "username": "eski.musteri",
+            "email": "eski.musteri@example.test",
+            "password": "abcdef",
+            "role": "customer",
+            "full_name": "Eski Musteri",
+        },
+    )
+    assert old_register_response.status_code == 200
+    old_user_id = old_register_response.json()["user"]["id"]
+    application_id = "APP-ORPHAN-001"
+    loan_id = "LOAN-ORPHAN-001"
+
+    save_application_record(
+        {
+            "application_id": application_id,
+            "owner_user_id": old_user_id,
+            "created_at": "2026-05-22T10:30:00",
+            "current_status": {"status_code": "APPROVED"},
+        },
+        store_path=application_store,
+    )
+    save_payment_plan(
+        {
+            "loan_id": loan_id,
+            "application_id": application_id,
+            "customer_user_id": old_user_id,
+            "first_due_date": "2026-06-01",
+        },
+        store_path=payment_store,
+    )
+    save_report_record(
+        application_id=application_id,
+        owner_user_id=old_user_id,
+        report_files={},
+        store_path=report_store,
+    )
+    save_assistant_exchange(
+        user_id=old_user_id,
+        loan_id=loan_id,
+        user_message="Kalan borcum ne?",
+        assistant_response={"intent": "remaining_debt"},
+        store_path=assistant_store,
+    )
+    save_uploaded_document(
+        file_name="kimlik.pdf",
+        file_stream=BytesIO(b"%PDF-1.4\n"),
+        owner_user_id=old_user_id,
+        document_type="identity",
+        document_name="Kimlik",
+        store_path=document_store,
+        file_folder=document_folder,
+    )
+    assert (document_folder / old_user_id).exists()
+
+    with sqlite3.connect(user_store) as connection:
+        connection.execute("DELETE FROM users WHERE user_id = ?", (old_user_id,))
+
+    new_register_response = client.post(
+        "/auth/register",
+        json={
+            "username": "yeni.musteri",
+            "email": "yeni.musteri@example.test",
+            "password": "abcdef",
+            "role": "customer",
+            "full_name": "Yeni Musteri",
+        },
+    )
+
+    assert new_register_response.status_code == 200
+    assert _table_count(application_store, "applications") == 0
+    assert _table_count(payment_store, "payment_plans") == 0
+    assert _table_count(report_store, "reports") == 0
+    assert _table_count(document_store, "documents") == 0
+    assert _table_count(assistant_store, "assistant_messages") == 0
+    assert not (document_folder / old_user_id).exists()
+    with sqlite3.connect(user_store) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM email_verification_tokens WHERE user_id = ?",
+            (old_user_id,),
+        ).fetchone()[0] == 0
 
 
 def test_customer_without_active_credit_has_no_payment_plan(tmp_path, monkeypatch) -> None:
@@ -813,6 +921,11 @@ def _login_headers(client: TestClient, role: str) -> dict[str, str]:
     )
     assert response.status_code == 200
     return _auth_header(response.json()["access_token"])
+
+
+def _table_count(database_path: Path, table_name: str) -> int:
+    with sqlite3.connect(database_path) as connection:
+        return int(connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
 
 
 def _auth_header(token: str) -> dict[str, str]:

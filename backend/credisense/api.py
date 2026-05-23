@@ -344,6 +344,8 @@ def login(login_request: LoginRequest) -> dict:
 def register(register_request: RegisterRequest) -> dict:
     """Yeni kullaniciyi SQLite veritabanina kaydeder ve dogrulama tokeni gonderir."""
 
+    _cleanup_orphaned_product_records()
+
     role = register_request.role.strip()
     if role not in {"customer", "expert"}:
         raise HTTPException(status_code=400, detail="Rol customer veya expert olmali.")
@@ -1509,8 +1511,16 @@ def _add_report_owner_name(report: dict) -> dict:
 def _cleanup_orphaned_product_records() -> None:
     """User tablosundan silinen kisilere ait urun kayitlarini temizler."""
 
+    if not _product_cleanup_scope_is_consistent():
+        return
+
     valid_user_ids = _current_user_ids()
+    if valid_user_ids is None:
+        return
+    _cleanup_orphaned_auth_records(valid_user_ids)
     if not valid_user_ids:
+        _delete_all_product_records()
+        _delete_orphan_document_folders(valid_user_ids)
         return
 
     orphan_application_ids = _delete_application_records(
@@ -1535,6 +1545,60 @@ def _cleanup_orphaned_product_records() -> None:
     _delete_orphan_document_folders(valid_user_ids)
 
 
+def _product_cleanup_scope_is_consistent() -> bool:
+    """Kullanici ve urun depolari ayni veri klasorundeyse temizlik yapar."""
+
+    user_data_folder = Path(USER_STORE_PATH).resolve().parent
+    product_store_paths = (
+        APPLICATION_STORE_PATH,
+        PAYMENT_STORE_PATH,
+        REPORT_STORE_PATH,
+        DOCUMENT_STORE_PATH,
+        ASSISTANT_STORE_PATH,
+    )
+    for store_path in product_store_paths:
+        if Path(store_path).resolve().parent != user_data_folder:
+            return False
+
+    return Path(DOCUMENT_FOLDER_PATH).resolve().parent == user_data_folder
+
+
+def _cleanup_orphaned_auth_records(valid_user_ids: set[str]) -> None:
+    """Users tablosundan elle silinen kullanicilarin auth yan kayitlarini temizler."""
+
+    path = Path(USER_STORE_PATH)
+    if not path.exists():
+        return
+
+    token_tables = ("sessions", "email_verification_tokens", "password_reset_tokens")
+    try:
+        with sqlite3.connect(path) as connection:
+            if not valid_user_ids:
+                for table_name in token_tables:
+                    connection.execute(f"DELETE FROM {table_name}")
+                return
+
+            placeholders = ",".join("?" for _ in valid_user_ids)
+            parameters = tuple(valid_user_ids)
+            for table_name in token_tables:
+                connection.execute(
+                    f"DELETE FROM {table_name} WHERE user_id NOT IN ({placeholders})",
+                    parameters,
+                )
+    except sqlite3.Error:
+        return
+
+
+def _delete_all_product_records() -> None:
+    """Kullanici tablosu bosaldiginda sahipsiz kalan tum urun kayitlarini siler."""
+
+    _delete_application_records(lambda _payload: True)
+    _delete_payment_records(lambda _payload: True)
+    _delete_report_records(lambda _payload: True)
+    _delete_document_records(lambda _payload: True)
+    _delete_assistant_records(lambda _payload: True)
+
+
 def _delete_product_records_for_user(user_id: str) -> None:
     """Hesap silinince kullaniciya ait basvuru, belge, rapor, odeme ve asistan kayitlarini siler."""
 
@@ -1553,7 +1617,7 @@ def _delete_product_records_for_user(user_id: str) -> None:
     _delete_document_folder(user_id)
 
 
-def _current_user_ids() -> set[str]:
+def _current_user_ids() -> set[str] | None:
     path = Path(USER_STORE_PATH)
     if not path.exists():
         return set()
@@ -1562,7 +1626,7 @@ def _current_user_ids() -> set[str]:
         with sqlite3.connect(path) as connection:
             rows = connection.execute("SELECT user_id FROM users").fetchall()
     except sqlite3.Error:
-        return set()
+        return None
 
     return {str(row[0]) for row in rows if row and row[0]}
 
