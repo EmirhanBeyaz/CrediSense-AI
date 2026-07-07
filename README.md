@@ -3,9 +3,6 @@
 CrediSense AI; kimlik, maaş bordrosu, banka hesap dökümü ve başvuru formu bilgilerini
 kullanarak kredi ön değerlendirmesi yapan katmanlı bir yapay zeka prototipidir.
 
-Bu repo şu anda terminal üzerinden çalışan bir backend çekirdeği içerir. Web arayüzü ve
-dosya yükleme ekranları sonraki geliştirme adımlarında eklenecektir.
-
 ## Ne İşe Yarar?
 
 Proje örnek belgeler üzerinden şu akışı çalıştırır:
